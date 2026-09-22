@@ -1,0 +1,6 @@
+/target/
+/data/
+/runtime/
+/parsed/
+/.idea/
+*.iml

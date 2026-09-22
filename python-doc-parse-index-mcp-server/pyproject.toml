@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "learning-knowledge-mcp"
+version = "0.1.0"
+description = "A local MCP knowledge base with MinerU, LlamaIndex, Redis and SQLite."
+readme = "readme.md"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+    "fastmcp>=3.4,<4",
+    "httpx>=0.27,<1",
+    "llama-index-core>=0.14,<0.15",
+    "llama-index-embeddings-dashscope>=0.5,<0.6",
+    "llama-index-llms-dashscope>=0.6,<0.7",
+    "llama-index-vector-stores-redis>=0.8,<0.9",
+    "mineru>=3.4,<3.5",
+    "python-dotenv>=1.0,<2",
+    "redis>=5,<7",
+    "redisvl>=0.4,<0.5",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "pytest-cov>=5,<8",
+]
+eval = [
+    # Ragas 0.4.3 still imports integrations removed by LangChain 1.x/0.4.x.
+    "langchain>=0.3,<1",
+    "langchain-community>=0.3,<0.4",
+    "langchain-core>=0.3,<1",
+    "langchain-openai>=0.3,<1",
+    "openai>=1.50,<3",
+    "pandas>=2.2,<4",
+    "ragas>=0.4,<0.5",
+]
+
+[project.scripts]
+knowledge-mcp = "mcp_server.main:main"
+
+[tool.setuptools.packages.find]
+include = ["mcp_server*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.coverage.run]
+source = ["mcp_server"]

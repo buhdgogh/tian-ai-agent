@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.vscode
+*.iml
+*.log
+.env
+**/target
+tmp
+data
+volumes
+**/parsed
+**/runtime
+**/.DS_Store

@@ -1,0 +1,64 @@
+server:
+  port: ${MCP_PORT:8081}
+
+spring:
+  application:
+    name: tian-doc-parse-index-mcp-server
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+  datasource:
+    url: ${KNOWLEDGE_DB_URL:jdbc:h2:file:./data/knowledge;DB_CLOSE_ON_EXIT=FALSE}
+    username: ${KNOWLEDGE_DB_USER:sa}
+    password: ${KNOWLEDGE_DB_PASSWORD:}
+    driver-class-name: org.h2.Driver
+
+doc-mcp:
+  endpoint: ${MCP_PATH:/mcp}
+  storage-dir: ${DOCUMENT_STORAGE_DIR:./data}
+  parsed-dir: ${PARSED_DIR:./parsed}
+  runtime-dir: ${DOCUMENT_RUNTIME_DIR:./runtime}
+  parse-workers: ${DOCUMENT_PARSE_WORKERS:2}
+  allow-local-files: ${ALLOW_LOCAL_FILES:true}
+  max-source-bytes: ${MAX_SOURCE_BYTES:209715200}
+  chunk-sizes: ${CHUNK_SIZES:4096,1024,256}
+  chunk-overlap: ${CHUNK_OVERLAP:24}
+  retrieval-top-k: ${RETRIEVAL_TOP_K:30}
+  rerank-top-n: ${RERANK_TOP_N:8}
+  hybrid-dense-weight: ${HYBRID_DENSE_WEIGHT:0.65}
+  hybrid-keyword-weight: ${HYBRID_BM25_WEIGHT:0.35}
+  mmr-relevance-weight: ${MMR_RELEVANCE_WEIGHT:0.78}
+  max-candidates-per-document: ${MAX_CANDIDATES_PER_DOC:4}
+  vector-store: ${VECTOR_STORE:local}
+  milvus:
+    uri: ${MILVUS_URI:http://127.0.0.1:19530}
+    token: ${MILVUS_TOKEN:root:Milvus}
+    database-name: ${MILVUS_DATABASE:default}
+    collection-name: ${MILVUS_COLLECTION:knowledge_chunks}
+    memory-collection-name: ${MILVUS_MEMORY_COLLECTION:agent_memories}
+    batch-size: ${MILVUS_BATCH_SIZE:500}
+  mineru:
+    enabled: ${MINERU_ENABLED:true}
+    base-url: ${MINERU_BASE_URL:https://mineru.net}
+    token: ${MINERU_TOKEN:${MINERU_API_TOKEN:}}
+    poll-interval: ${MINERU_POLL_INTERVAL:2s}
+    timeout: ${MINERU_TIMEOUT:30m}
+  embedding:
+    provider: ${EMBEDDING_PROVIDER:local}
+    model: ${EMBEDDING_MODEL:text-embedding-v3}
+    dimensions: ${EMBEDDING_DIMENSIONS:${REDIS_VECTOR_DIMS:1024}}
+    batch-size: ${EMBEDDING_BATCH_SIZE:10}
+    api-key: ${DASHSCOPE_API_KEY:}
+    endpoint: ${DASHSCOPE_EMBEDDING_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/embeddings/text-embedding/text-embedding}
+  chat:
+    model: ${QA_MODEL:qwen-plus}
+    api-key: ${DASHSCOPE_API_KEY:}
+    endpoint: ${DASHSCOPE_CHAT_ENDPOINT:https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation}
+    max-output-tokens: ${QA_MAX_OUTPUT_TOKENS:2048}
+  evidence:
+    minimum-relevant-score: ${EVIDENCE_MIN_RELEVANT_SCORE:0.15}
+    minimum-sufficient-score: ${EVIDENCE_MIN_SUFFICIENT_SCORE:0.35}
+    minimum-sources: ${EVIDENCE_MIN_SOURCES:1}
+
+logging:
+  level:
+    com.tianaiagent.docmcp: INFO
