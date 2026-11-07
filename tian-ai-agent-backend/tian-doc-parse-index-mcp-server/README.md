@@ -12,7 +12,7 @@
 - DashScope 批量 Embedding；本地开发可使用确定性哈希向量
 - H2 事务化保存文档、任务和层级 Chunk 元数据
 - 可切换 H2 本地向量或 Milvus 向量存储，支持按文档覆盖更新和删除
-- 稠密向量 + 关键词覆盖率混合召回、单文档候选限制和 MMR 去重
+- Milvus Dense + 原生 BM25 独立召回、RRF 融合、单文档候选限制和 MMR 去重；支持仅关键词检索
 - 基于 Qwen 的证据约束问答；未配置 API Key 时返回可追溯原文
 - 按相关性、证据充分度与来源冲突进行证据分级，低证据请求拒答或提示人工复核
 - 面向会话所有者隔离的长期记忆向量写入与语义召回
@@ -26,7 +26,7 @@
 | `parse_documents_batch` | 异步提交多个文档 |
 | `get_parse_task` | 查询解析与索引状态 |
 | `index_document` | 直接索引 Markdown |
-| `retrieve_knowledge` | 返回混合召回证据 |
+| `retrieve_knowledge` | 返回证据；`retrieval_mode` 支持 hybrid（默认）、keyword、dense |
 | `get_chunk_context` | 按Chunk ID返回三级父子上下文 |
 | `query_knowledge` | 生成带来源的答案 |
 | `delete_document` | 删除文档及索引 |
@@ -44,7 +44,9 @@
 
 ## 启动
 
-仅使用本地 Tika 和本地哈希向量即可启动：
+默认配置使用 Milvus。先启动 Milvus，并直接编辑 `src/main/resources/application.yml` 中的连接与模型配置。
+完整 BM25 配置、补建和查询示例见 [Milvus BM25 说明](../MILVUS_BM25.md)。
+如需无外部向量库的测试模式，显式将 `doc-mcp.vector-store` 改为 `local`：
 
 ```powershell
 mvn spring-boot:run
@@ -118,6 +120,6 @@ curl -X POST http://127.0.0.1:8081/mcp -H "Content-Type: application/json" -d '{
 ## 说明
 
 - Java 版没有依赖 LlamaIndex；层级切块、向量计算、余弦检索、混合打分和 MMR 均为本模块实现。
-- 默认 H2 向量检索会在 JVM 中计算余弦相似度，适合单机与测试环境；配置 `VECTOR_STORE=milvus` 后由 Milvus 完成向量候选召回，Java 侧继续执行关键词融合、单文档候选限制和 MMR 去重。
+- Milvus 模式由 Milvus 分别完成 Dense 与 BM25 召回，Java 侧进行 RRF 融合、单文档候选限制和 MMR。显式 local 模式在 JVM 内计算向量与关键词覆盖率，不提供原生 BM25。
 - MinerU REST 字段集中在 `MineruClient`。如果所使用的 MinerU 平台版本调整了 API 字段，只需修改这一适配器。
 - HTTP 文档下载会拒绝回环、内网、链路本地和组播地址，避免把 MCP 工具变成 SSRF 入口。

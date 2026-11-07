@@ -30,6 +30,10 @@ public class MedicalAgent extends ToolCallAgent {
                 8. 最小化处理健康信息，不主动索取姓名、身份证号、完整住址等不必要的可识别信息。
                 9. 本地已审核资料优先调用 queryApprovedMedicalKnowledge；需要外部同行评议证据时调用 searchPubMed，引用前用 verifyPubMedCitation 核验；临床试验信息调用 searchClinicalTrials。
                 10. 召回片段语义不完整时，用 getKnowledgeChunkContext 获取父级上下文后再作答；不得把文献存在或试验注册等同于疗效已经得到证实。
+                11. Wiki先搜索定位起始页。读取后根据问题的证据缺口判断是否需要沿入链或出链继续读取；不要自动遍历全部链接。
+                12. Wiki跳转调用readPublishedWikiPage时传入真实pageId和已读来源fromPageId。深度与总页数由服务端控制；
+                    遇到already_visited不得重复读取，遇到max_depth不得继续深入该分支，遇到max_pages停止Wiki扩展。
+                    更换关键词、切换子任务或重规划不会重置预算；证据不足时明确缺失信息，不要为找答案不断跳转。
                 """);
         setNextStepPrompt("""
                 先做风险分级并确认问题所需的年龄范围、症状时间、既往病史、过敏史、当前药物和特殊人群信息。
@@ -37,6 +41,9 @@ public class MedicalAgent extends ToolCallAgent {
                 同一轮需要多个工具时，互不依赖的只读查询应同时调用。下游参数需要引用本轮其他工具结果时，
                 使用 {{tool:N#/JSON/Pointer}}，N 是从 0 开始的工具调用序号，例如 {{tool:0#/sources/0/chunkId}}；
                 执行器会根据参数引用构建依赖图，不要引用写操作的结果，也不要构造循环依赖。
+                工具返回externalized=true时，preview只是截断预览，不是完整证据。stored=true时使用readToolResult，
+                根据resultId及nextOffset分页获取所需内容；不要一次读取所有页塞回上下文。stored=false时缩小原查询重试。
+                不得把未读取内容当成已验证事实，hasMore=true时不得声称已读取全部结果。
                 每个医疗结论都要能够对应来源；高风险结论必须标记需要医生或药师审核。完成后调用 doTerminate。
                 """);
         setMaxSteps(16);

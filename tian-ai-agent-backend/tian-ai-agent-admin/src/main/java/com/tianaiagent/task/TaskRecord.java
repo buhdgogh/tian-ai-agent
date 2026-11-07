@@ -9,7 +9,7 @@ import java.util.Map;
 public class TaskRecord {
     private String id;
     private TaskType type;
-    private TaskStatus status;
+    private volatile TaskStatus status;
     private String ownerId;
     private int progress;
     private String stage;

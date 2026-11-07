@@ -4,6 +4,8 @@ import com.tianaiagent.agent.MedicalAgent;
 import com.tianaiagent.chatmemory.EnterpriseMemoryService;
 import com.tianaiagent.chatmemory.FileBasedChatMemory;
 import com.tianaiagent.chatmemory.LayeredMemoryService;
+import com.tianaiagent.chatmemory.RecentMemoryWindow;
+import com.tianaiagent.toolgateway.ToolResultStore;
 import jakarta.annotation.Resource;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.Message;
@@ -22,7 +24,12 @@ import java.util.Set;
 @Service
 public class MedicalAgentService {
     @Resource private ToolCallback[] allTools;
-    @Resource private ChatModel dashscopeChatModel;
+    @Resource private ChatModel routedChatModel;
+    @Resource private ToolResultStore toolResultStore;
+    @Value("${agent.memory.context-max-messages:12}")
+    private int contextMaxMessages = 12;
+    @Value("${agent.memory.context-max-chars:12000}")
+    private int contextMaxChars = 12000;
 
     private final ChatMemory chatMemory;
     private final EnterpriseMemoryService memoryService;
@@ -50,10 +57,20 @@ public class MedicalAgentService {
     }
 
     public SseEmitter doChatByStream(String message, String chatId) {
+        return doChatByStream(message, chatId, null);
+    }
+
+    public SseEmitter doChatByStream(String message, String chatId,
+                                     java.util.function.BiConsumer<String, Throwable> observer) {
         MedicalSafetyService.RiskAssessment risk = safetyService.assess(message);
-        if (risk.emergency()) return immediate(risk.message());
+        if (risk.emergency()) {
+            if (observer != null) observer.accept(risk.message(), null);
+            return immediate(risk.message());
+        }
         MedicalIntentRouter.RoutingDecision route = intentRouter.route(message, chatMemory.get(chatId));
-        return createAgent(chatId, route).runStream(message);
+        MedicalAgent agent = createAgent(chatId, route);
+        agent.setStreamObserver(observer);
+        return agent.runStream(message);
     }
 
     public String doChat(String message, String chatId) {
@@ -68,6 +85,19 @@ public class MedicalAgentService {
         return risk.emergency() ? risk.message() : createAgent(chatId, route).run(message);
     }
 
+    /** Editable conversations use a committed history snapshot, never a late worker's Redis writes. */
+    public String doConversationChat(String message, String sessionId, MedicalIntentRouter.RoutingDecision route,
+                                     List<Message> history, java.util.function.BooleanSupplier cancellationRequested) {
+        MedicalSafetyService.RiskAssessment risk = safetyService.assess(message);
+        if (risk.emergency()) return risk.message();
+        MedicalAgent agent = createAgent(sessionId, route);
+        agent.setChatMemory(null);
+        agent.setCompletionListener(null);
+        agent.setCancellationRequested(cancellationRequested);
+        agent.setMessageList(new java.util.ArrayList<>(RecentMemoryWindow.select(history, contextMaxMessages, contextMaxChars)));
+        return agent.run(message);
+    }
+
     /** 工作流内部执行入口：不把规划提示和中间结果写入用户会话记忆。 */
     public String executeTask(String message) {
         MedicalSafetyService.RiskAssessment risk = safetyService.assess(message);
@@ -77,9 +107,12 @@ public class MedicalAgentService {
     /** MedicalAgent实际上就是一个ReAct Agent */
     private MedicalAgent createAgent(String chatId, MedicalIntentRouter.RoutingDecision route) {
         MedicalAgent agent = new MedicalAgent(
-                allTools, dashscopeChatModel, parallelToolCallExecutor, parallelSafeTools);
+                allTools, routedChatModel, parallelToolCallExecutor, parallelSafeTools);
         agent.setChatId(chatId);
         agent.setChatMemory(chatMemory);
+        agent.setToolResultStore(toolResultStore);
+        agent.setHistorySelector(messages -> RecentMemoryWindow.select(
+                messages, contextMaxMessages, contextMaxChars));
         if (route != null) {
             agent.setSystemPrompt(agent.getSystemPrompt() + "\n\n" + intentRouter.routingHint(route));
             agent.setSystemPrompt(agent.getSystemPrompt() + layeredMemory.context(

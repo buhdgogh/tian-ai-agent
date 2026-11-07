@@ -4,26 +4,26 @@
       <div class="logo-container" @click="goHome">
         <div class="logo-icon">{{ aiType === 'medical' ? '⚕' : '🔬' }}</div>
         <div class="logo-text">
-          <h2>{{ aiType === 'medical' ? '天医医疗信息助手' : '深度循证分析' }}</h2>
-          <p>{{ aiType === 'medical' ? '证据解释与安全分诊支持' : '多步检索、核对与人工审核' }}</p>
+          <h2>天医医疗助手</h2>
+          <p>健康问答、循证检索与深度分析</p>
         </div>
       </div>
       
-      <button class="new-chat-btn" @click="startNewChat">
-        <span class="plus-icon">+</span> 开启新对话
+      <button class="new-chat-btn" :disabled="isCreating" @click="startNewChat">
+        <span class="plus-icon">+</span> {{ isCreating ? '正在创建…' : '开启新对话' }}
       </button>
     </div>
 
     <div class="history-container">
       <div class="history-title">对话记录</div>
       <div class="history-group">
-        <div class="group-label">今天</div>
+        <div class="group-label">历史会话</div>
         <div class="history-list">
           <div
             v-for="(chat, index) in historyList" 
-            :key="chat.id || index"
+            :key="`${chat.type}:${chat.id || index}`"
             class="history-item"
-            :class="{ active: currentChatId === chat.id }"
+            :class="{ active: currentChatId === chat.id && currentChatType === chat.type }"
             @click="selectChat(chat)"
           >
             <span class="chat-icon">💬</span>
@@ -35,6 +35,7 @@
     </div>
 
     <div class="sidebar-bottom">
+      <p class="group-label">当前用户：{{ username || '正在加载…' }}</p>
       <button class="clear-btn" @click="clearChat">
         <span class="trash-icon">🗑️</span> 清空当前对话
       </button>
@@ -43,11 +44,13 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const props = defineProps({
+  username: String,
+  isCreating: Boolean,
   currentChatId: String,
+  currentChatType: String,
   historyList: {
     type: Array,
     default: () => []

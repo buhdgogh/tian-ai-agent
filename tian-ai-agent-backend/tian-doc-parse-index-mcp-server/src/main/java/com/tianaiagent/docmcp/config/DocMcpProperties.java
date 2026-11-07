@@ -23,12 +23,57 @@ public class DocMcpProperties {
     private double hybridKeywordWeight = 0.35;
     private double mmrRelevanceWeight = 0.78;
     private int maxCandidatesPerDocument = 4;
-    private String vectorStore = "local";
+    private String vectorStore = "milvus";
+    private int hybridRrfK = 60;
+    private double bm25ScoreScale = 1.0;
     private Milvus milvus = new Milvus();
     private Mineru mineru = new Mineru();
     private Embedding embedding = new Embedding();
     private Chat chat = new Chat();
     private Evidence evidence = new Evidence();
+    private Wiki wiki = new Wiki();
+
+    public Wiki getWiki() { return wiki; }
+    public void setWiki(Wiki wiki) { this.wiki = wiki; }
+
+    public static class Wiki {
+        private String outputDir = "./docs/wiki";
+        public String getOutputDir() { return outputDir; }
+        public void setOutputDir(String value) { outputDir = value; }
+        private boolean enabled = true;
+        private boolean autoCompile = true;
+        private boolean autoPublish = false;
+        private int maxAttempts = 3;
+        private int batchChars = 12000;
+        private int maxCallsPerJob = 80;
+        private int maxFactsPerTopic = 120;
+        private int maxSynthesisChars = 32000;
+        private int maxOutputTokens = 4096;
+        private int requestTimeoutSeconds = 90;
+        private int leaseSeconds = 300;
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean value) { enabled = value; }
+        public boolean isAutoCompile() { return autoCompile; }
+        public void setAutoCompile(boolean value) { autoCompile = value; }
+        public boolean isAutoPublish() { return autoPublish; }
+        public void setAutoPublish(boolean value) { autoPublish = value; }
+        public int getMaxAttempts() { return maxAttempts; }
+        public void setMaxAttempts(int value) { maxAttempts = value; }
+        public int getBatchChars() { return batchChars; }
+        public void setBatchChars(int value) { batchChars = value; }
+        public int getMaxCallsPerJob() { return maxCallsPerJob; }
+        public void setMaxCallsPerJob(int value) { maxCallsPerJob = value; }
+        public int getMaxFactsPerTopic() { return maxFactsPerTopic; }
+        public void setMaxFactsPerTopic(int value) { maxFactsPerTopic = value; }
+        public int getMaxSynthesisChars() { return maxSynthesisChars; }
+        public void setMaxSynthesisChars(int value) { maxSynthesisChars = value; }
+        public int getMaxOutputTokens() { return maxOutputTokens; }
+        public void setMaxOutputTokens(int value) { maxOutputTokens = value; }
+        public int getRequestTimeoutSeconds() { return requestTimeoutSeconds; }
+        public void setRequestTimeoutSeconds(int value) { requestTimeoutSeconds = value; }
+        public int getLeaseSeconds() { return leaseSeconds; }
+        public void setLeaseSeconds(int value) { leaseSeconds = value; }
+    }
 
     public static class Evidence {
         private double minimumRelevantScore = 0.15;
@@ -49,6 +94,9 @@ public class DocMcpProperties {
         private String collectionName = "knowledge_chunks";
         private String memoryCollectionName = "agent_memories";
         private int batchSize = 500;
+        private String keywordCollectionName = "";
+        public String getKeywordCollectionName() { return keywordCollectionName; }
+        public void setKeywordCollectionName(String value) { keywordCollectionName = value; }
         public String getUri() { return uri; }
         public void setUri(String uri) { this.uri = uri; }
         public String getToken() { return token; }
@@ -148,6 +196,10 @@ public class DocMcpProperties {
     public int getMaxCandidatesPerDocument() { return maxCandidatesPerDocument; }
     public void setMaxCandidatesPerDocument(int maxCandidatesPerDocument) { this.maxCandidatesPerDocument = maxCandidatesPerDocument; }
     public String getVectorStore() { return vectorStore; }
+    public int getHybridRrfK() { return hybridRrfK; }
+    public void setHybridRrfK(int value) { hybridRrfK = value; }
+    public double getBm25ScoreScale() { return bm25ScoreScale; }
+    public void setBm25ScoreScale(double value) { bm25ScoreScale = value; }
     public void setVectorStore(String vectorStore) { this.vectorStore = vectorStore; }
     public Milvus getMilvus() { return milvus; }
     public void setMilvus(Milvus milvus) { this.milvus = milvus; }

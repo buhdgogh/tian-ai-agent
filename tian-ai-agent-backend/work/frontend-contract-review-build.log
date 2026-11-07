@@ -1,0 +1,25 @@
+
+> tian-ai-agent-frontend@0.0.0 build
+> vite build
+
+vite v4.5.14 building for production...
+transforming...
+✓ 109 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                           0.91 kB │ gzip:  0.67 kB
+dist/assets/Login-2c50ee2a.css            1.11 kB │ gzip:  0.50 kB
+dist/assets/Home-4be09432.css             2.90 kB │ gzip:  1.04 kB
+dist/assets/index-3152d6d2.css            4.82 kB │ gzip:  1.51 kB
+dist/assets/MedicalTasks-0cef7400.css     5.30 kB │ gzip:  1.55 kB
+dist/assets/Medical-bef03d3e.css         12.35 kB │ gzip:  3.22 kB
+dist/assets/KnowledgeBase-ab989a3c.css   36.53 kB │ gzip:  7.28 kB
+dist/assets/Home-e8822ab5.js              1.50 kB │ gzip:  1.28 kB
+dist/assets/Login-2bfd6c99.js             1.68 kB │ gzip:  1.04 kB
+dist/assets/workflow-26f59fb6.js          2.10 kB │ gzip:  1.09 kB
+dist/assets/MedicalTasks-67686510.js      6.11 kB │ gzip:  3.31 kB
+dist/assets/Medical-cfe0c8db.js          19.40 kB │ gzip:  9.03 kB
+dist/assets/KnowledgeBase-b49ea34d.js    38.15 kB │ gzip: 15.33 kB
+dist/assets/purify.es-d713cbbd.js        73.29 kB │ gzip: 24.43 kB
+dist/assets/index-f9eea04e.js           148.48 kB │ gzip: 59.71 kB
+✓ built in 2.18s

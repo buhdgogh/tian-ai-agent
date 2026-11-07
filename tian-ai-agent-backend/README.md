@@ -4,11 +4,18 @@
 
 ## 核心能力
 
+- 主对话使用 CompletableFuture 后台任务和 SSE 实时展示分析/工具执行摘要，最终回答由模型流式生成；支持阶段折叠、中断和恢复，详见 [Agent 实时对话](AGENT_STREAMING.md)。
+
+任务、工具审计和用户画像的数据库配置与接口见 [MySQL 持久化说明](MYSQL_PERSISTENCE.md)。
+默认用户 `zhangsan / 123456`、多会话与消息记录见 [用户会话说明](USER_CONVERSATIONS.md)。
+工具审计通过RabbitMQ持久化投递、异步写入MySQL，支持最多3次重试、双端确认和死信接收，见 [RabbitMQ 工具审计](RABBITMQ_TOOL_AUDIT.md)。
+
 - 医疗问答与 SSE 多轮对话
 - 调用模型前的确定性急症红旗识别
 - 指南、药品标签与医学资料的结构化知识库
 - 按标题、章节和表格结构解析文档
-- Milvus Dense、关键词覆盖率和 MMR 的分阶段检索与消融评测
+- Milvus Dense 与原生 BM25 独立召回、RRF 融合与 MMR 去重，支持仅关键词检索；配置与补建见 [Milvus BM25](MILVUS_BM25.md)
+- LLM Wiki 按实体→概念→综合分析异步预编译 Markdown，写入 docs/wiki 分类目录与索引、日志，支持原文快照、版本审核和失效传播；使用方式见 [LLM Wiki](LLMWIKI.md)
 - Redis RAG 语义缓存：按知识库版本隔离，并通过意图、关键约束、词面和向量双重阈值控制复用
 - 带来源编号的证据回答，以及无相关、证据不足、来源冲突的分级处置
 - 发布机构、版本、日期、适用人群、有效状态和审核状态管理
@@ -39,6 +46,48 @@ mvn -pl tian-ai-agent-admin spring-boot:run
 ```
 
 主服务地址为 `http://localhost:8123/api`，接口文档为 `http://localhost:8123/api/swagger-ui.html`。
+
+### Admin 多模型路由
+
+在 `tian-ai-agent-admin/src/main/resources/application.yml` 已有的 `agent` 下配置 `model-routing`。密钥通过环境变量提供。下面启用通义千问和 DeepSeek，并将 OpenAI 设为可选备用。
+
+```yaml
+agent:
+  model-routing:
+    connect-timeout: 5s
+    request-timeout: 30s
+    cooldown: 30s
+    providers:
+      - id: qwen
+        protocol: dashscope
+        base-url: https://dashscope.aliyuncs.com
+        api-key: ${DASHSCOPE_API_KEY}
+        model: qwen-plus
+        priority: 0
+      - id: deepseek
+        protocol: openai-compatible
+        base-url: https://api.deepseek.com
+        completions-path: /chat/completions
+        api-key: ${DEEPSEEK_API_KEY}
+        model: deepseek-flash
+        reasoning-effort: none
+        priority: 0
+      - id: openai
+        enabled: false
+        protocol: openai-compatible
+        base-url: https://api.openai.com
+        api-key: ${OPENAI_API_KEY:}
+        model: ${OPENAI_MODEL:}
+        priority: 10
+```
+
+- `priority` 数字越小越先尝试。同一优先级按配置顺序轮询，当前组没有可用候选时尝试下一组。需要固定主备顺序时，分别设置不同的优先级。
+- 网络异常、超时、限流、上游 5xx 和厂商凭证或端点不可用会触发切换。失败路由在冷却期内暂时跳过，冷却后随正常请求重新尝试。普通请求错误（例如 HTTP 400）直接返回。
+- 默认模型可接收工具定义和流式请求。若模型缺少对应能力，设置 `supports-tools: false` 或 `supports-streaming: false`，路由会跳过它。OpenAI 兼容接口默认路径为 `/v1/chat/completions`，可按厂商文档覆盖。DeepSeek 示例设置 `reasoning-effort: none`，使多轮工具调用使用标准 Chat Completions 消息格式。
+- 普通 SSE 问答在首段有效输出前可以切换厂商。已经输出内容后，异常会结束本次模型流。同步工具调用在重试范围之外执行，后续模型请求携带已有工具结果。
+- 清空 `providers` 可沿用现有 DashScope 对话配置。这组配置覆盖 Admin 问答、ReAct、工作流和辅助生成。文档 MCP 服务内部的问答和 Wiki 生成使用 `doc-mcp.chat`，向量模型也有独立配置。
+
+本地 JVM 启动前在同一个终端设置厂商密钥。使用 Compose 时在 `.env` 中填写启用厂商的密钥，修改内置 YAML 后执行 `docker compose up -d --build admin`。需要在运行配置中覆盖路由列表时，可向 Admin 容器提供同结构的 `SPRING_APPLICATION_JSON`，然后重建容器。
 
 ## Docker Compose 本地环境
 
@@ -90,6 +139,12 @@ docker compose ps
 主应用不在启动阶段构建内存向量库；MinerU 解析结果由 Java 文档 MCP 完成 `4096/1024/256` 分层切片、Embedding、Milvus/关键词召回和 MMR 重排。
 
 长期记忆默认关闭。启用时设置 `AGENT_LONG_TERM_MEMORY_ENABLED=true` 及 `AGENT_MEMORY_MYSQL_URL`、`AGENT_MEMORY_MYSQL_USERNAME`、`AGENT_MEMORY_MYSQL_PASSWORD`；近期完整消息仍由 File/Redis 滑动窗口管理，摘要与确认事实保存到 MySQL，语义向量保存到独立 Milvus Collection。长期记忆只用于理解上下文，不能作为医疗证据。
+
+ReAct 对话输入默认只加载最近最多 12 条历史消息、约 12000 字符（包含工具参数与结果），按完整用户回合选取，避免拆散工具调用/返回；可通过 `AGENT_MEMORY_CONTEXT_MAX_MESSAGES`、`AGENT_MEMORY_CONTEXT_MAX_CHARS` 调整。超出预算的回合不注入，Redis/File 原始记录仍按原来的 200 条窗口保留。启用长期记忆后，达到 12 条消息首次异步生成摘要，之后每 3 次符合条件的对话完成回调更新一次，可用 `AGENT_MEMORY_COMPACT_THRESHOLD`、`AGENT_MEMORY_COMPACT_EVERY` 调整。更新时合并上一版摘要和近期消息，摘要最多 4000 字符，确认事实最多 30 条、每条 200 字符；重复的 MySQL/Milvus 摘要不重复注入。摘要尚未完成或长期记忆关闭时，窗口外历史可能暂不可见。这里采用字符预算，并非完整请求的精确 Token 限制；本轮新工具结果不在此次历史窗口裁剪范围内。
+
+ReAct 新工具结果另有 Token 预算：单个结果默认最多 8192、每次 `act()` 的一批结果合计最多 24576（仅结果文本，不含消息协议开销）。该默认值针对多篇文献摘要、5~8个RAG片段及父级上下文，减少常规检索被频繁截断；分页读取未指定预算时同样使用8192上限，可主动请求更小的页。使用 Spring AI 的 CL100K 编码器本地估算，不能视为 Qwen 原生精确 Token 数，也不限制整场对话的累计 Token。超限原文写入 Java 工作目录下的 `tmp/tool-results/{resultId}.json`，模型仅收到带 `stored/resultId/preview` 的有预算 JSON；`preview` 是截断文本而不是模型生成的摘要。Agent 可调用 `readToolResult(resultId, offset, maxTokens)` 分页读取，后续偏移使用返回的 `nextOffset`，读取结果仍受预算约束。同一批工具依赖解析使用完整结果，完成后才裁剪写回模型历史，不改变 JSON Pointer 依赖语义。结果按当前会话隔离；无会话的工作流步骤按单次 Agent 实例隔离，不能跨实例共享读取。此隔离沿用现有 chatId 边界，不额外提供用户身份鉴权。
+
+可用环境变量：`TOOL_RESULT_MAX_TOKENS`（至少256）、`TOOL_RESULT_BATCH_MAX_TOKENS`（不小于单结果预算）、`TOOL_RESULT_DIRECTORY`、`TOOL_RESULT_TTL_HOURS`（默认24）、`TOOL_RESULT_MAX_DISK_BYTES`（默认256MiB）。TTL 到期后拒绝读取，并在下一次大结果写入时清理过期文件；超过磁盘配额或写盘失败时返回 `stored=false` 和有限预览，要求缩小原查询，不回退为完整原文注入。该目录可能包含工具返回的原始医疗资料，请使用受限目录；Docker 如需跨容器重建保留结果，应为该目录配置持久卷。无需数据库建表或启用长期记忆。
 
 不要把 OSS AccessKey 写入 `application.yml` 或提交到版本库。开发环境应使用系统环境变量或 IntelliJ IDEA Run Configuration 的 Environment variables。
 

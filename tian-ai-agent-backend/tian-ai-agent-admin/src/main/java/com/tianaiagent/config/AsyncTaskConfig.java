@@ -1,5 +1,6 @@
 package com.tianaiagent.config;
 
+import com.tianaiagent.observability.ExecutionContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -22,6 +23,7 @@ public class AsyncTaskConfig {
         executor.setMaxPoolSize(maxPoolSize);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix("ai-task-");
+        executor.setTaskDecorator(ExecutionContext::wrap);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(30);
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
@@ -43,6 +45,7 @@ public class AsyncTaskConfig {
         executor.setKeepAliveSeconds(60);
         executor.setAllowCoreThreadTimeOut(true);
         executor.setThreadNamePrefix("tool-gateway-worker-");
+        executor.setTaskDecorator(ExecutionContext::wrap);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);  // 应用关闭时等待线程池执行时间
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());
@@ -71,6 +74,7 @@ public class AsyncTaskConfig {
         executor.setMaxPoolSize(size);
         executor.setQueueCapacity(queueCapacity);
         executor.setThreadNamePrefix(threadNamePrefix);
+        executor.setTaskDecorator(ExecutionContext::wrap);
         executor.setWaitForTasksToCompleteOnShutdown(true);
         executor.setAwaitTerminationSeconds(60);
         executor.setRejectedExecutionHandler(new ThreadPoolExecutor.AbortPolicy());

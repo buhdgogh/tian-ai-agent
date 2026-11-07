@@ -2,6 +2,7 @@ package com.tianaiagent.agent;
 
 import cn.hutool.core.util.StrUtil;
 import com.tianaiagent.agent.model.AgentState;
+import com.tianaiagent.observability.ExecutionContext;
 import lombok.Data;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.chat.client.ChatClient;
@@ -14,6 +15,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
+import java.util.function.UnaryOperator;
 
 /**
  * 描述：抽象基础代理类，用于管理代理状态和执行流程。
@@ -47,7 +49,10 @@ public abstract class BaseAgent {
     // 对话 ID 和 记忆
     private String chatId;
     private ChatMemory chatMemory;
+    private UnaryOperator<List<Message>> historySelector = messages -> messages;
     private Consumer<List<Message>> completionListener;
+    private java.util.function.BiConsumer<String, Throwable> streamObserver;
+    private java.util.function.BooleanSupplier cancellationRequested = () -> false;
 
     /**
      * 运行代理
@@ -71,7 +76,7 @@ public abstract class BaseAgent {
         if (StrUtil.isNotBlank(chatId) && chatMemory != null) {
             List<Message> savedMessages = chatMemory.get(chatId);
             if (savedMessages != null) {
-                this.messageList = new ArrayList<>(savedMessages);
+                this.messageList = new ArrayList<>(historySelector.apply(savedMessages));
                 historySize = this.messageList.size();
             }
         }
@@ -83,11 +88,13 @@ public abstract class BaseAgent {
         try {
             // 执行循环
             for (int i = 0; i < maxSteps && state != AgentState.FINISHED; i++) {
+                checkCancelled();
                 int stepNumber = i + 1;
                 currentStep = stepNumber;
                 log.info("Executing step {}/{}", stepNumber, maxSteps);
                 // 单步执行
                 String stepResult = step();
+                checkCancelled();
                 String result = "Step " + stepNumber + ": " + stepResult;
                 results.add(result);
             }
@@ -104,6 +111,9 @@ public abstract class BaseAgent {
             }
             
             return String.join("\n", results);
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            state = AgentState.FINISHED;
+            return "执行错误：本轮已中断";
         } catch (Exception e) {
             state = AgentState.ERROR;
             log.error("error executing agent", e);
@@ -139,7 +149,7 @@ public abstract class BaseAgent {
         if (StrUtil.isNotBlank(chatId) && chatMemory != null) {
             List<Message> savedMessages = chatMemory.get(chatId);
             if (savedMessages != null) {
-                this.messageList = new ArrayList<>(savedMessages);
+                this.messageList = new ArrayList<>(historySelector.apply(savedMessages));
                 loadedHistorySize = this.messageList.size();
             }
         }
@@ -147,22 +157,35 @@ public abstract class BaseAgent {
         // 3.1、记录消息上下文
         messageList.add(new UserMessage(userPrompt));
         final int historySize = loadedHistorySize;
+        StringBuffer streamed = new StringBuffer();
+        var notified = new java.util.concurrent.atomic.AtomicBoolean();
+        Consumer<Throwable> finish = error -> {
+            if (streamObserver != null && notified.compareAndSet(false, true)) streamObserver.accept(streamed.toString(), error);
+        };
+        sseEmitter.onTimeout(() -> finish.accept(new java.util.concurrent.TimeoutException("对话流超时")));
+        sseEmitter.onError(finish);
+        sseEmitter.onCompletion(() -> finish.accept(new IOException("对话流已关闭")));
 
         // 4、异步执行流式返回
-        CompletableFuture.runAsync(() -> {
+        CompletableFuture.runAsync(ExecutionContext.wrap(() -> {
             try {
                 // 执行循环
                 for (int i = 0; i < maxSteps && state != AgentState.FINISHED; i++) {
+                    checkCancelled();
                     int stepNumber = i + 1;
                     currentStep = stepNumber;
                     log.info("Executing step {}/{}", stepNumber, maxSteps);
                     String stepResult = step();  // 单步执行
+                    checkCancelled();
+                    if (!streamed.isEmpty()) streamed.append('\n');
+                    streamed.append(stepResult);
                     sseEmitter.send(stepResult);  // 每一步都将结果发送给客户端（非流式的是将多步执行完的结果一起返回）
                 }
                 // 检查是否超出步骤限制
                 if (currentStep >= maxSteps) {
                     state = AgentState.FINISHED;
                     sseEmitter.send("Terminated: Reached max steps (" + maxSteps + ")");
+                    streamed.append("\nTerminated: Reached max steps (").append(maxSteps).append(")");
                 }
                 
                 // 5、执行完毕保存记忆
@@ -172,11 +195,13 @@ public abstract class BaseAgent {
                 }
                 
                 // 执行结束，发送完成标志
+                finish.accept(null);
                 sseEmitter.send("[DONE]");
                 sseEmitter.complete();
             } catch (Exception e) {
                 state = AgentState.ERROR;
                 log.error("error executing agent in stream", e);
+                finish.accept(e);
                 try {
                     sseEmitter.send("执行错误: " + e.getMessage());
                 } catch (IOException ex) {
@@ -187,7 +212,7 @@ public abstract class BaseAgent {
                 // 6、清理资源（每轮对话完成需要做什么）
                 this.cleanup();
             }
-        });
+        }));
         return sseEmitter;
     }
 
@@ -197,6 +222,12 @@ public abstract class BaseAgent {
      * @return
      */
     public abstract String step();
+
+    protected void checkCancelled() {
+        if (Thread.currentThread().isInterrupted() || cancellationRequested.getAsBoolean()) {
+            throw new java.util.concurrent.CancellationException("本轮已中断");
+        }
+    }
 
     /**
      * 清理资源

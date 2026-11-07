@@ -22,7 +22,7 @@ public class EvidenceAssessmentService {
             return new Assessment(Level.NO_RELEVANT_EVIDENCE, false,
                     "知识库中没有召回相关资料，无法依据知识库回答。", "没有召回结果");
         }
-        double topScore = number(sources.getFirst().get("score"));
+        double topScore = sources.stream().mapToDouble(source -> number(source.get("score"))).max().orElse(0);
         if (topScore < properties.getEvidence().getMinimumRelevantScore()) {
             return new Assessment(Level.NO_RELEVANT_EVIDENCE, false,
                     "召回资料与问题相关性过低，无法依据知识库回答。", "最高相关性低于阈值");

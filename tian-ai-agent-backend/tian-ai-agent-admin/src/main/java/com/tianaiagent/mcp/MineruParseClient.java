@@ -85,6 +85,20 @@ public class MineruParseClient {
      */
     public ParseIndexResult parseAndIndex(String docId, String fileSource, String contentSha256,
                                           Map<String, Object> documentMetadata) {
+        if (auditGateway == null) return enqueueParse(docId, fileSource, contentSha256, documentMetadata);
+        // A physical batch can serve several tasks. Record each document's logical operation on its
+        // original task thread instead of assigning the entire batch to an arbitrary first task.
+        return auditGateway.observeOperation("document:parseAndIndex", docId,
+                () -> enqueueParse(docId, fileSource, contentSha256, documentMetadata));
+    }
+
+    private com.tianaiagent.toolgateway.ToolGateway auditGateway;
+
+    @org.springframework.beans.factory.annotation.Autowired
+    void setAuditGateway(com.tianaiagent.toolgateway.ToolGateway gateway) { this.auditGateway = gateway; }
+
+    private ParseIndexResult enqueueParse(String docId, String fileSource, String contentSha256,
+                                          Map<String, Object> documentMetadata) {
         PendingParse pending = new PendingParse(
                 docId, fileSource, contentSha256, Map.copyOf(documentMetadata),
                 System.nanoTime(), new CompletableFuture<>());

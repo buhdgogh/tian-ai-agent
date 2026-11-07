@@ -43,7 +43,7 @@
             <div class="filters">
               <input v-model="filters.ownerId" placeholder="所有者 ID" @keydown.enter="loadTasks" />
               <select v-model="filters.type" @change="loadTasks">
-                <option value="">全部类型</option><option value="AGENT_WORKFLOW">Agent Workflow</option>
+                <option value="">全部类型</option><option value="AGENT_RESPONSE">智能体对话</option><option value="AGENT_WORKFLOW">Agent Workflow</option>
                 <option value="DOCUMENT_INDEX">文档索引</option><option value="RAG_EVALUATION">RAG 评测</option>
               </select>
               <button class="secondary" @click="loadTasks">查询</button>
@@ -102,6 +102,7 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { cancelTask, createAgentWorkflow, createRagEvaluation, getTasks, getToolAudits } from '../api'
+import { taskWorkflow } from '../utils/workflow'
 
 const router = useRouter()
 const tab = ref('workflow')
@@ -127,7 +128,7 @@ const evaluation = ref({
   casesText: JSON.stringify([{ id: 'case-1', question: '文档中的主要结论是什么？', expectedDocumentIds: ['请替换为文档ID'] }], null, 2)
 })
 
-const workflowTasks = computed(() => tasks.value.filter(item => item.type === 'AGENT_WORKFLOW'))
+const workflowTasks = computed(() => tasks.value.filter(item => item.type === 'AGENT_WORKFLOW' || (item.type === 'AGENT_RESPONSE' && taskWorkflow(item).plan)))
 const evaluationTasks = computed(() => tasks.value.filter(item => item.type === 'RAG_EVALUATION'))
 
 const showNotice = (type, text) => {
@@ -199,7 +200,7 @@ const TaskList = defineComponent({
   emits: ['cancel'],
   setup(props, { emit }) {
     const expanded = ref({})
-    const label = type => ({ AGENT_WORKFLOW: 'Agent Workflow', DOCUMENT_INDEX: '文档索引', RAG_EVALUATION: 'RAG 评测' }[type] || type)
+    const label = type => ({ AGENT_RESPONSE: '智能体对话', AGENT_WORKFLOW: 'Agent Workflow', DOCUMENT_INDEX: '文档索引', RAG_EVALUATION: 'RAG 评测' }[type] || type)
     const statusLabel = status => ({ PENDING: '等待中', RUNNING: '运行中', COMPLETED: '已完成', FAILED: '失败', CANCELLED: '已取消', SUCCESS: '已完成', ERROR: '失败' }[status] || status)
     const stageLabel = stage => ({ ProfileAnalyzer: '背景与目标分析', CareerPlanner: '规划与工具执行', PlanReviewer: '完整性与可执行性复核' }[stage] || stage || '等待执行')
     const stringify = value => typeof value === 'string' ? value : JSON.stringify(value, null, 2)

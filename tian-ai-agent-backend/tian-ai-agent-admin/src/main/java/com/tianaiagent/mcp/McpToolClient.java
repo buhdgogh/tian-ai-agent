@@ -3,6 +3,8 @@ package com.tianaiagent.mcp;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tianaiagent.toolgateway.ToolGateway;
+import org.springframework.beans.factory.annotation.Autowired;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -67,6 +69,10 @@ public class McpToolClient {
 
     private volatile String sessionId;
     private volatile long sessionLastUsedNanos;
+    private ToolGateway toolGateway;
+
+    @Autowired
+    void setToolGateway(ToolGateway toolGateway) { this.toolGateway = toolGateway; }
 
     public McpToolClient(ObjectMapper objectMapper) {
         this.objectMapper = objectMapper;
@@ -104,6 +110,14 @@ public class McpToolClient {
      * @return 工具返回的文本（如 Markdown、构建摘要、答案）
      */
     public synchronized String call(String toolName, Map<String, Object> arguments) {
+        if (toolGateway == null) return callWithRetry(toolName, arguments);
+        String serialized;
+        try { serialized = objectMapper.writeValueAsString(arguments); }
+        catch (JsonProcessingException error) { throw new IllegalArgumentException("MCP参数无法序列化", error); }
+        return toolGateway.observeOperation("mcp:" + toolName, serialized, () -> callWithRetry(toolName, arguments));
+    }
+
+    private String callWithRetry(String toolName, Map<String, Object> arguments) {
         refreshIdleSessionIfNecessary();
         try {
             return callTool(toolName, arguments);

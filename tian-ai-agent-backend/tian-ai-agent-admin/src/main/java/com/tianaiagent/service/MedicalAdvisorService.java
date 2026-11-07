@@ -54,7 +54,7 @@ public class MedicalAdvisorService {
     private final QueryRewriter queryRewriter;
     private final LayeredMemoryService layeredMemory;
 
-    public MedicalAdvisorService(ChatModel dashscopeChatModel,
+    public MedicalAdvisorService(ChatModel routedChatModel,
                                  EnterpriseMemoryService memoryService,
                                  MedicalSafetyService safetyService,
                                  KnowledgeBaseService knowledgeBaseService,
@@ -69,7 +69,7 @@ public class MedicalAdvisorService {
         this.layeredMemory = layeredMemory;
         this.chatMemory = memoryService.chatMemory(EnterpriseMemoryService.MEDICAL_ADVISOR);
         this.ragChatMemory = memoryService.chatMemory(EnterpriseMemoryService.MEDICAL_RAG);
-        this.chatClient = ChatClient.builder(dashscopeChatModel)
+        this.chatClient = ChatClient.builder(routedChatModel)
                 .defaultSystem(SYSTEM_PROMPT)
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(chatMemory).build(), new MyLoggerAdvisor())
                 .build();
@@ -206,7 +206,15 @@ public class MedicalAdvisorService {
         if (risk.emergency()) return risk.message();
         return chatClient.prompt().user(message)
                 .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
-                .toolCallbacks(allTools).call().content();
+                .toolCallbacks(allTools)
+                .toolContext(java.util.Map.of(com.tianaiagent.wiki.WikiTraversalState.CONTEXT_KEY,
+                        executionWikiState()))
+                .call().content();
+    }
+
+    private com.tianaiagent.wiki.WikiTraversalState executionWikiState() {
+        var state = com.tianaiagent.observability.ExecutionContext.current().wikiTraversal();
+        return state == null ? new com.tianaiagent.wiki.WikiTraversalState() : state;
     }
 
     public record MedicalEvidenceReport(String title, String riskLevel, String summary,

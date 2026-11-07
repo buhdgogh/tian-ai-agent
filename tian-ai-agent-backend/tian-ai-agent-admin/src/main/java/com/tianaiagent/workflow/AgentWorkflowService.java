@@ -3,6 +3,10 @@ package com.tianaiagent.workflow;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tianaiagent.advisor.MyLoggerAdvisor;
+import com.tianaiagent.observability.ExecutionContext;
+import com.tianaiagent.conversation.ConversationService;
+import com.tianaiagent.conversation.ConversationRepository.Turn;
+import org.springframework.beans.factory.annotation.Autowired;
 import com.tianaiagent.service.MedicalAgentService;
 import com.tianaiagent.service.MedicalIntentRouter;
 import com.tianaiagent.service.MedicalSafetyService;
@@ -46,6 +50,11 @@ public class AgentWorkflowService {
             4. 医疗事实优先使用已审核知识库，需要时才检索网页并核对原文、日期和版本。
             5. 不得规划诊断、处方、停换药或个体剂量决策；高风险内容只能整理证据并要求专业审核。
             6. 不要生成重复、形式化或与目标无关的步骤。
+            7. 问答、循证检索、比较分析和报告是可组合能力。按实际需要将它们串联，
+               例如检索步骤产出来源和证据，分析步骤依赖检索结果，报告步骤依赖分析结果。
+               不要强制所有问题都经过全部阶段；简单问题不扩张成冗长流程。
+            8. 用户要求报告时，将风险、证据与来源、不确定性、下一步和专业复核要求写入完成标准；
+               仅在用户要求文件时规划文件导出，不把生成报告等同于必须生成 PDF。
             """;
 
     private static final String REVIEWER_PROMPT = """
@@ -65,12 +74,13 @@ public class AgentWorkflowService {
     private final ChatClient workflowChatClient;
     private final ObjectMapper objectMapper;
     private final AsyncTaskExecutor workflowStepExecutor;
+    @Autowired(required = false) private ConversationService conversations;
 
     public AgentWorkflowService(AsyncTaskCenter taskCenter,
                                 MedicalAgentService agentService,
                                 MedicalSafetyService safetyService,
                                 MedicalIntentRouter intentRouter,
-                                @Qualifier("dashscopeChatModel") ChatModel chatModel,
+                                @Qualifier("routedChatModel") ChatModel chatModel,
                                 ObjectMapper objectMapper,
                                 @Qualifier("workflowStepExecutor") AsyncTaskExecutor workflowStepExecutor) {
         this.taskCenter = taskCenter;
@@ -84,20 +94,43 @@ public class AgentWorkflowService {
     }
 
     public TaskRecord submit(WorkflowRequest request) {
+        return submitForConversation(request, null);
+    }
+
+    public TaskRecord submitForConversation(WorkflowRequest request, Turn existingTurn) {
         if (request == null || request.objective() == null || request.objective().isBlank()) {
             throw new IllegalArgumentException("工作流目标不能为空");
         }
         String objective = request.objective().trim();
         String chatId = validChatId(request.chatId());
-        Map<String, Object> input = Map.of(
-                "objective", objective,
-                "chatId", chatId,
-                "reviewEnabled", request.reviewEnabled());
-        return taskCenter.submit(TaskType.AGENT_WORKFLOW, request.ownerId(), input,
-                context -> executeWorkflow(context, objective, request.reviewEnabled()));
+        String owner = request.ownerId();
+        if (conversations != null && (owner == null || owner.isBlank())) owner = conversations.defaultUserId();
+        Turn turn = existingTurn;
+        if (turn == null && conversations != null) turn = conversations.begin(owner, chatId, "agent", objective);
+        Map<String, Object> input = new LinkedHashMap<>();
+        input.put("objective", objective); input.put("chatId", chatId); input.put("reviewEnabled", request.reviewEnabled());
+        if (turn != null) {
+            if (!turn.session().userId().equals(owner) || !turn.session().id().equals(chatId)) throw new IllegalArgumentException("工作流会话归属不一致");
+            input.put("conversationReplyId", turn.replyMessageId());
+            input.put("sessionId", turn.session().sessionId());
+        }
+        try {
+            if (turn != null && !conversations.repository().isRunning(turn.replyMessageId())) throw new java.util.concurrent.CancellationException("本轮已中断");
+            var submitted = taskCenter.submit(TaskType.AGENT_WORKFLOW, owner, input,
+                    context -> executeWorkflow(context, objective, request.reviewEnabled()));
+            // An interrupt may race with submission before the task id reaches the message metadata.
+            if (turn != null && !conversations.repository().isRunning(turn.replyMessageId())
+                    && (submitted.getStatus() == com.tianaiagent.task.TaskStatus.PENDING || submitted.getStatus() == com.tianaiagent.task.TaskStatus.RUNNING)) {
+                return taskCenter.cancel(submitted.getId());
+            }
+            return submitted;
+        } catch (RuntimeException error) {
+            if (turn != null) conversations.fail(turn, "", error);
+            throw error;
+        }
     }
 
-    private WorkflowResult executeWorkflow(AsyncTaskCenter.TaskContext context, String objective,
+    public WorkflowResult executeWorkflow(AsyncTaskCenter.TaskContext context, String objective,
                                            boolean reviewEnabled) throws Exception {
         context.update(5, "确定性安全分诊", "正在 LLM 调用前检查急症红旗");
         MedicalSafetyService.RiskAssessment risk = safetyService.assess(objective);
@@ -178,9 +211,14 @@ public class AgentWorkflowService {
                             + ready.stream().map(WorkflowStep::id).toList());
 
             Map<String, StepExecution> completedSnapshot = Map.copyOf(completed);
+            var trace = ExecutionContext.current();
             List<Future<StepExecution>> futures = ready.stream()
                     .map(step -> workflowStepExecutor.submit(
-                            () -> executeStep(objective, step, completedSnapshot)))
+                            () -> {
+                                try (var ignored = ExecutionContext.open(trace.step(step.id(), iteration))) {
+                                    return executeStep(objective, step, completedSnapshot);
+                                }
+                            }))
                     .toList();
             List<StepExecution> batchResults;
             try {
@@ -233,6 +271,8 @@ public class AgentWorkflowService {
         return workflowChatClient.prompt().system("""
                         你是结果整合器。严格依据步骤结果回答原始目标，不补造事实或引用。
                         删除过程话术和重复内容，保留证据、来源、不确定性与安全提示。
+                        用户要求报告时按摘要、证据与来源、风险、不确定性、下一步组织最终答案，
+                        将前置检索和分析结果融合为一份交付内容，不让用户自行拼接步骤输出。
                         """)
                 .user("原始目标：\n" + objective + "\n计划：\n" + clip(asJson(plan))
                         + "\n步骤结果：\n" + clip(asJson(executions)))

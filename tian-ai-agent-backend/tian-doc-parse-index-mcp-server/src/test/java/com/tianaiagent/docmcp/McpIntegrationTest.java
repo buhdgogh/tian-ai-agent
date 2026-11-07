@@ -20,6 +20,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(properties = {
         "spring.datasource.url=jdbc:h2:mem:mcp-test;DB_CLOSE_DELAY=-1",
         "doc-mcp.vector-store=local",
+        "doc-mcp.wiki.output-dir=./work/mcp-wiki-test-files",
         "doc-mcp.embedding.provider=local",
         "doc-mcp.embedding.dimensions=128",
         "doc-mcp.chunk-sizes=64,24,10"
@@ -28,6 +29,17 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class McpIntegrationTest {
     @Autowired MockMvc mvc;
     @Autowired ObjectMapper mapper;
+
+    @Test void explicitRetrievalModesAreHonoredAndLocalModeCannotClaimBm25() throws Exception {
+        mvc.perform(post("/mcp").contentType(MediaType.APPLICATION_JSON).content("""
+                {"jsonrpc":"2.0","id":101,"method":"tools/call","params":{"name":"retrieve_knowledge","arguments":{"question":"检索资料","retrieval_mode":"dense"}}}
+                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.result.content[0].text", containsString("h2-float32-dense-mmr")));
+        mvc.perform(post("/mcp").contentType(MediaType.APPLICATION_JSON).content("""
+                {"jsonrpc":"2.0","id":102,"method":"tools/call","params":{"name":"retrieve_knowledge","arguments":{"question":"检索资料","retrieval_mode":"keyword"}}}
+                """))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.result.content[0].text", containsString("invalid_argument")));
+    }
 
     @Test
     void initializesListsToolsAndIndexesMarkdown() throws Exception {
@@ -42,7 +54,7 @@ class McpIntegrationTest {
                 {"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
                 """))
                 .andExpect(status().isOk())
-                .andExpect(jsonPath("$.result.tools.length()").value(13));
+                .andExpect(jsonPath("$.result.tools.length()").value(24));
 
         mvc.perform(post("/mcp").contentType(MediaType.APPLICATION_JSON).content("""
                 {"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"index_document","arguments":{"doc_id":"geo-1","text":"# 地质报告\\n\\n花岗岩主要分布在研究区北部。","title":"地质报告"}}}

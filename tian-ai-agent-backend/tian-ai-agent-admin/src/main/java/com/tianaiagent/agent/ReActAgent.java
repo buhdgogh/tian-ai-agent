@@ -42,12 +42,15 @@ public abstract class ReActAgent extends BaseAgent {
         try {
             // 先思考
             String thought = think();
+            checkCancelled();
             if (!shouldAct()) {
                 return thought;
             }
             // 再行动
             String actionResult = act();
             return thought + "\n" + actionResult;
+        } catch (java.util.concurrent.CancellationException cancelled) {
+            throw cancelled;
         } catch (Exception e) {
             // 记录异常日志
             log.error("Step execution failed", e);

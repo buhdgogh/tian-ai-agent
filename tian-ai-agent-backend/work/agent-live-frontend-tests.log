@@ -1,0 +1,263 @@
+
+> tian-ai-agent-frontend@0.0.0 test
+> node --test
+
+TAP version 13
+# Subtest: SSE supports fragmented CRLF frames, heartbeat comments and Chinese UTF-8 deltas
+ok 1 - SSE supports fragmented CRLF frames, heartbeat comments and Chinese UTF-8 deltas
+  ---
+  duration_ms: 4.0947
+  type: 'test'
+  ...
+# Subtest: execution updates stay separate from answer and collapse at answer_start
+ok 2 - execution updates stay separate from answer and collapse at answer_start
+  ---
+  duration_ms: 0.6711
+  type: 'test'
+  ...
+# Subtest: cancellation retains partial answer and generated turn ids fit MySQL
+ok 3 - cancellation retains partial answer and generated turn ids fit MySQL
+  ---
+  duration_ms: 5.2805
+  type: 'test'
+  ...
+# Subtest: login redirects stay inside the application
+ok 4 - login redirects stay inside the application
+  ---
+  duration_ms: 1.467
+  type: 'test'
+  ...
+# Subtest: explicit login and logout use the server session without automatic login
+    # Subtest: anonymous requests never log in automatically
+    ok 1 - anonymous requests never log in automatically
+      ---
+      duration_ms: 0.8993
+      type: 'test'
+      ...
+    # Subtest: successful login stores identity and logout clears it
+    ok 2 - successful login stores identity and logout clears it
+      ---
+      duration_ms: 2.6438
+      type: 'test'
+      ...
+    # Subtest: wrong password does not create a client identity
+    ok 3 - wrong password does not create a client identity
+      ---
+      duration_ms: 0.4538
+      type: 'test'
+      ...
+    # Subtest: a missing logout endpoint preserves the logged-in identity for retry
+    ok 4 - a missing logout endpoint preserves the logged-in identity for retry
+      ---
+      duration_ms: 0.6702
+      type: 'test'
+      ...
+    # Subtest: an old current-user response cannot restore identity after logout
+    ok 5 - an old current-user response cannot restore identity after logout
+      ---
+      duration_ms: 0.8244
+      type: 'test'
+      ...
+    1..5
+ok 5 - explicit login and logout use the server session without automatic login
+  ---
+  duration_ms: 573.5499
+  type: 'test'
+  ...
+# Subtest: session lifecycle creates records first, isolates history, and rejects stale responses
+    # Subtest: first send creates a database session before emitting its id
+    ok 1 - first send creates a database session before emitting its id
+      ---
+      duration_ms: 15.206
+      type: 'test'
+      ...
+    # Subtest: switching medical to rag requests the correct history and discards late replies
+    ok 2 - switching medical to rag requests the correct history and discards late replies
+      ---
+      duration_ms: 10.8763
+      type: 'test'
+      ...
+    # Subtest: stop aborts the active request and keeps the cancelled reply
+    ok 3 - stop aborts the active request and keeps the cancelled reply
+      ---
+      duration_ms: 1.5465
+      type: 'test'
+      ...
+    # Subtest: unmount aborts work and suppresses late history updates
+    ok 4 - unmount aborts work and suppresses late history updates
+      ---
+      duration_ms: 1.0269
+      type: 'test'
+      ...
+    1..4
+ok 6 - session lifecycle creates records first, isolates history, and rejects stale responses
+  ---
+  duration_ms: 461.5393
+  type: 'test'
+  ...
+# Subtest: logout 404 offers a retry that calls logout again and then opens login
+ok 7 - logout 404 offers a retry that calls logout again and then opens login
+  ---
+  duration_ms: 397.8892
+  type: 'test'
+  ...
+# Subtest: legacy agent URLs open the automatic assistant without a forced mode
+ok 8 - legacy agent URLs open the automatic assistant without a forced mode
+  ---
+  duration_ms: 8.9701
+  type: 'test'
+  ...
+# Subtest: one assistant automatically dispatches, reconnects and cancels server workflows
+    # Subtest: a simple question uses the same automatic entry without mode selection
+    ok 1 - a simple question uses the same automatic entry without mode selection
+      ---
+      duration_ms: 39.7459
+      type: 'test'
+      ...
+    # Subtest: a composite goal returns one answer with its dependency plan and review
+    ok 2 - a composite goal returns one answer with its dependency plan and review
+      ---
+      duration_ms: 9.5208
+      type: 'test'
+      ...
+    # Subtest: SSE shows execution immediately and appends answer text before completion
+    ok 3 - SSE shows execution immediately and appends answer text before completion
+      ---
+      duration_ms: 20.8938
+      type: 'test'
+      ...
+    # Subtest: refresh reconnects a persisted running task without submitting it again
+    ok 4 - refresh reconnects a persisted running task without submitting it again
+      ---
+      duration_ms: 30.8776
+      type: 'test'
+      ...
+    # Subtest: stop cancels the server task and preserves the confirmed cancelled state
+    ok 5 - stop cancels the server task and preserves the confirmed cancelled state
+      ---
+      duration_ms: 6.0461
+      type: 'test'
+      ...
+    # Subtest: a cancellation failure does not pretend that background work stopped
+    ok 6 - a cancellation failure does not pretend that background work stopped
+      ---
+      duration_ms: 10.4617
+      type: 'test'
+      ...
+    # Subtest: a result that completed during cancellation remains completed
+    ok 7 - a result that completed during cancellation remains completed
+      ---
+      duration_ms: 63.0074
+      type: 'test'
+      ...
+    # Subtest: a stopped question can be edited while an old response is still returning
+    ok 8 - a stopped question can be edited while an old response is still returning
+      ---
+      duration_ms: 12.7624
+      type: 'test'
+      ...
+    # Subtest: a rejected revision keeps the original question visible
+    ok 9 - a rejected revision keeps the original question visible
+      ---
+      duration_ms: 12.1925
+      type: 'test'
+      ...
+    # Subtest: completed answers cannot be edited through the stopped-question action
+    ok 10 - completed answers cannot be edited through the stopped-question action
+      ---
+      duration_ms: 3.6753
+      type: 'test'
+      ...
+    1..10
+ok 9 - one assistant automatically dispatches, reconnects and cancels server workflows
+  ---
+  duration_ms: 723.3211
+  type: 'test'
+  ...
+# Subtest: persisted pending and failed messages remain visible without content
+ok 10 - persisted pending and failed messages remain visible without content
+  ---
+  duration_ms: 14.3705
+  type: 'test'
+  ...
+# Subtest: agent history reconstructs tool path and only displays final answer
+ok 11 - agent history reconstructs tool path and only displays final answer
+  ---
+  duration_ms: 5.3745
+  type: 'test'
+  ...
+# Subtest: agent error events remain failures
+ok 12 - agent error events remain failures
+  ---
+  duration_ms: 1.3058
+  type: 'test'
+  ...
+# Subtest: continued legacy conversations also hide intermediate Agent thoughts
+ok 13 - continued legacy conversations also hide intermediate Agent thoughts
+  ---
+  duration_ms: 0.8896
+  type: 'test'
+  ...
+# Subtest: structured report and workflow review survive history conversion
+ok 14 - structured report and workflow review survive history conversion
+  ---
+  duration_ms: 0.612
+  type: 'test'
+  ...
+# Subtest: backend error strings and identity errors have usable messages
+ok 15 - backend error strings and identity errors have usable messages
+  ---
+  duration_ms: 2.3404
+  type: 'test'
+  ...
+# Subtest: logout endpoint 404 is distinct from a missing conversation
+ok 16 - logout endpoint 404 is distinct from a missing conversation
+  ---
+  duration_ms: 0.7552
+  type: 'test'
+  ...
+# Subtest: superseded questions and partial answers stay out of visible history
+ok 17 - superseded questions and partial answers stay out of visible history
+  ---
+  duration_ms: 0.5841
+  type: 'test'
+  ...
+# Subtest: only the latest stopped or failed question can be edited
+ok 18 - only the latest stopped or failed question can be edited
+  ---
+  duration_ms: 1.8108
+  type: 'test'
+  ...
+# Subtest: pending tasks expose progress without claiming completion
+ok 19 - pending tasks expose progress without claiming completion
+  ---
+  duration_ms: 1.895
+  type: 'test'
+  ...
+# Subtest: completed tasks combine final answer, plan and review into the same reply
+ok 20 - completed tasks combine final answer, plan and review into the same reply
+  ---
+  duration_ms: 0.4915
+  type: 'test'
+  ...
+# Subtest: failed and cancelled tasks preserve their actual status
+ok 21 - failed and cancelled tasks preserve their actual status
+  ---
+  duration_ms: 0.2997
+  type: 'test'
+  ...
+# Subtest: history retains task id, progress and review for reconnect
+ok 22 - history retains task id, progress and review for reconnect
+  ---
+  duration_ms: 1.5648
+  type: 'test'
+  ...
+1..22
+# tests 41
+# suites 0
+# pass 41
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2502.626

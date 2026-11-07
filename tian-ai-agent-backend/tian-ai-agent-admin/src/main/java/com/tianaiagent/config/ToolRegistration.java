@@ -5,6 +5,7 @@ import com.tianaiagent.medical.MedicalEvidenceClient;
 import com.tianaiagent.mcp.McpToolClient;
 import com.tianaiagent.tools.*;
 import com.tianaiagent.toolgateway.ToolGateway;
+import com.tianaiagent.toolgateway.ToolResultStore;
 import com.tianaiagent.service.KnowledgeBaseService;
 import org.springframework.ai.support.ToolCallbacks;
 import org.springframework.ai.tool.ToolCallback;
@@ -26,22 +27,27 @@ public class ToolRegistration {
     private final MedicalEvidenceClient medicalEvidenceClient;
     private final ObjectMapper objectMapper;
     private final McpToolClient mcpToolClient;
+    private final ToolResultStore toolResultStore;
+    private final com.tianaiagent.wiki.WikiTraversalGuard wikiTraversal;
 
     public ToolRegistration(ToolGateway toolGateway, KnowledgeBaseService knowledgeBaseService,
                             MedicalEvidenceClient medicalEvidenceClient, ObjectMapper objectMapper,
-                            McpToolClient mcpToolClient) {
+                            McpToolClient mcpToolClient, ToolResultStore toolResultStore,
+                            com.tianaiagent.wiki.WikiTraversalGuard wikiTraversal) {
         this.toolGateway = toolGateway;
         this.knowledgeBaseService = knowledgeBaseService;
         this.medicalEvidenceClient = medicalEvidenceClient;
         this.objectMapper = objectMapper;
         this.mcpToolClient = mcpToolClient;
+        this.toolResultStore = toolResultStore;
+        this.wikiTraversal = wikiTraversal;
     }
 
     @Bean
     public ToolCallback[] allTools() {
         WebSearchTool webSearchTool = new WebSearchTool(searchApiKey);
         WebScrapingTool webScrapingTool = new WebScrapingTool();
-        MedicalKnowledgeTool medicalKnowledgeTool = new MedicalKnowledgeTool(knowledgeBaseService, mcpToolClient);
+        MedicalKnowledgeTool medicalKnowledgeTool = new MedicalKnowledgeTool(knowledgeBaseService, mcpToolClient, wikiTraversal);
         MedicalEvidenceTool medicalEvidenceTool = new MedicalEvidenceTool(medicalEvidenceClient, objectMapper);
         PDFGenerationTool pdfGenerationTool = new PDFGenerationTool();
         TerminateTool terminateTool = new TerminateTool();
@@ -53,7 +59,8 @@ public class ToolRegistration {
                 medicalKnowledgeTool,
                 medicalEvidenceTool,
                 pdfGenerationTool,
-                terminateTool
+                terminateTool,
+                new ToolResultTool(toolResultStore)
         );
         return toolGateway.guard(callbacks);
     }

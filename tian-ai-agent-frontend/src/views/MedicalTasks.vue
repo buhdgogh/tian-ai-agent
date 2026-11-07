@@ -17,7 +17,7 @@
     <section v-if="tasks.length" class="tasks">
       <article v-for="task in tasks" :key="task.id">
         <div class="task-top">
-          <div><b>{{ task.input?.objective || '医疗信息工作流' }}</b><small>{{ task.id }} · {{ task.type || 'AGENT_WORKFLOW' }}</small></div>
+          <div><b>{{ task.input?.objective || '医疗信息工作流' }}</b><small>{{ task.id }} · {{ task.type === 'AGENT_RESPONSE' ? '智能体对话' : '医疗工作流' }}</small></div>
           <span :class="'status '+String(task.status||'UNKNOWN').toLowerCase()">{{ statusText(task.status) }}</span>
         </div>
         <div class="progress"><i :style="{width:progressValue(task)+'%'}"></i></div>
@@ -31,10 +31,10 @@
             <em>{{ stepStateLabel(task,index) }}</em>
           </div>
         </section>
-        <div v-else-if="running(task.status)" class="planning">正在等待 Planner 生成动态步骤…</div>
+        <div v-else-if="running(task.status)" class="planning">{{ task.type === 'AGENT_RESPONSE' ? 'Agent 正在执行，请查看当前阶段…' : '正在等待 Planner 生成动态步骤…' }}</div>
 
-        <section v-if="workflow(task).executionResult" class="integrated-result">
-          <h3>整合结果</h3><div class="markdown" v-html="md(stringify(workflow(task).executionResult))"></div>
+        <section v-if="taskAnswer(task)" class="integrated-result">
+          <h3>整合结果</h3><div class="markdown" v-html="md(stringify(taskAnswer(task)))"></div>
         </section>
         <section v-if="reviewOf(task)" :class="['review',reviewOf(task).passed?'passed':'attention']">
           <div><b>{{ reviewOf(task).passed ? '自动质量审查通过' : '自动质量审查未通过' }}</b><span>{{ reviewOf(task).message || '未提供审查说明' }}</span></div>
@@ -49,7 +49,7 @@
         <button v-if="running(task.status)" class="cancel" @click="remove(task)">终止任务</button>
       </article>
     </section>
-    <div v-else class="empty">暂无医疗工作流任务</div>
+    <div v-else class="empty">暂无对话或医疗工作流任务</div>
     <div v-if="notice" class="notice">{{ notice }}</div>
   </main>
 </template>
@@ -60,14 +60,14 @@ import {marked} from 'marked'
 import DOMPurify from 'dompurify'
 import {cancelTask,createMedicalWorkflow,getTasks} from '../api'
 import {apiError,newChatId} from '../utils/medical'
+import {loadCurrentUser} from '../stores/user'
+import {taskWorkflow,taskAnswer,mergeAgentTasks,taskStepState} from '../utils/workflow'
 const router=useRouter(),tasks=ref([]),objective=ref(''),reviewEnabled=ref(true),loading=ref(false),creating=ref(false),notice=ref('')
 let poll=null,noticeTimer=null
-const ownerId=(()=>{const key='tian_medical_owner_id';let value=localStorage.getItem(key);if(!value){value=newChatId('web');localStorage.setItem(key,value)}return value})()
 const running=status=>['QUEUED','PENDING','RUNNING','PROCESSING'].includes(String(status||'').toUpperCase())
 const statusText=status=>({QUEUED:'等待执行',PENDING:'等待执行',RUNNING:'执行中',PROCESSING:'执行中',COMPLETED:'已完成',SUCCESS:'已完成',FAILED:'失败',CANCELLED:'已终止'}[String(status||'').toUpperCase()]||status||'未知')
 const showNotice=text=>{notice.value=text;clearTimeout(noticeTimer);noticeTimer=setTimeout(()=>notice.value='',5000)}
-const parse=value=>{if(typeof value!=='string')return value||{};try{return JSON.parse(value)}catch{return{executionResult:value}}}
-const workflow=task=>parse(task.result)
+const workflow=taskWorkflow
 const planSteps=task=>Array.isArray(workflow(task).plan?.steps)?workflow(task).plan.steps:[]
 const executions=task=>Array.isArray(workflow(task).executions)?workflow(task).executions:[]
 const executionAt=(task,index)=>executions(task)[index]
@@ -76,11 +76,11 @@ const stepDescription=step=>typeof step==='object'?(step.description||step.reaso
 const executionText=value=>typeof value==='string'?value:(value.output||value.result||value.content||value.message||JSON.stringify(value,null,2))
 const stringify=value=>typeof value==='string'?value:JSON.stringify(value,null,2)
 const progressValue=task=>Math.max(0,Math.min(100,Number(task.progress)||(['COMPLETED','SUCCESS'].includes(String(task.status).toUpperCase())?100:0)))
-const stepState=(task,index)=>executionAt(task,index)?'done':running(task.status)&&index===executions(task).length?'active':'pending'
-const stepStateLabel=(task,index)=>executionAt(task,index)?'已执行':running(task.status)&&index===executions(task).length?'执行中':'等待'
+const stepState=taskStepState
+const stepStateLabel=(task,index)=>({done:'已执行',active:'执行中',pending:'等待',failed:'失败',stopped:'已跳过或终止'}[stepState(task,index)])
 const reviewOf=task=>workflow(task).review||task.review||null
-const load=async()=>{loading.value=true;try{const {data}=await getTasks({ownerId,type:'AGENT_WORKFLOW'});tasks.value=Array.isArray(data)?data:(data?.items||data?.tasks||[])}catch(error){showNotice(apiError(error))}finally{loading.value=false}}
-const create=async()=>{creating.value=true;try{await createMedicalWorkflow({objective:objective.value.trim(),chatId:newChatId('workflow'),ownerId,reviewEnabled:reviewEnabled.value});objective.value='';showNotice('工作流已创建。');await load()}catch(error){showNotice(apiError(error))}finally{creating.value=false}}
+const load=async()=>{if(loading.value)return;loading.value=true;try{const user=await loadCurrentUser();const responses=await Promise.all(['AGENT_RESPONSE','AGENT_WORKFLOW'].map(type=>getTasks({ownerId:user.userId,type})));tasks.value=mergeAgentTasks(responses)}catch(error){showNotice(apiError(error))}finally{loading.value=false}}
+const create=async()=>{creating.value=true;try{await loadCurrentUser();await createMedicalWorkflow({objective:objective.value.trim(),chatId:newChatId('workflow'),reviewEnabled:reviewEnabled.value});objective.value='';showNotice('工作流已创建。');await load()}catch(error){showNotice(apiError(error))}finally{creating.value=false}}
 const remove=async task=>{if(!window.confirm('确定终止这个工作流任务吗？'))return;try{await cancelTask(task.id);await load()}catch(error){showNotice(apiError(error))}}
 onMounted(()=>{load();poll=setInterval(()=>{if(tasks.value.some(task=>running(task.status)))load()},1500)})
 onBeforeUnmount(()=>{clearInterval(poll);clearTimeout(noticeTimer)})

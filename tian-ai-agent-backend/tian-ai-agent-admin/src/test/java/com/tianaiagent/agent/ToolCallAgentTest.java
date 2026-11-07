@@ -22,11 +22,99 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class ToolCallAgentTest {
+    @org.junit.jupiter.api.io.TempDir java.nio.file.Path resultDirectory;
     private final ThreadPoolTaskExecutor executor = createExecutor();
+
+    @Test
+    void resolvesDependenciesUsingFullResultThenStoresBoundedResponses() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var store = new com.tianaiagent.toolgateway.ToolResultStore(
+                mapper, resultDirectory.toString(), 512, 1024, 24, 1_000_000);
+        AtomicReference<String> downstreamArguments = new AtomicReference<>();
+        String original = "{\"padding\":\"" + "large content ".repeat(2000) + "\",\"id\":\"last-field\"}";
+        ToolCallback source = simpleCallback("source", ignored -> original);
+        ToolCallback downstream = simpleCallback("downstream", arguments -> {
+            downstreamArguments.set(arguments);
+            return "ok";
+        });
+        ToolCallAgent agent = new ToolCallAgent(new ToolCallback[]{source, downstream}, executor,
+                Set.of("source", "downstream"));
+        agent.setChatId("chat1");
+        agent.setToolResultStore(store);
+        AssistantMessage calls = new AssistantMessage("", Map.of(), List.of(
+                new AssistantMessage.ToolCall("call1", "function", "source", "{}"),
+                new AssistantMessage.ToolCall("call2", "function", "downstream", "{\"id\":\"{{tool:0#/id}}\"}")));
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(calls))));
+        agent.act();
+        assertEquals("{\"id\":\"last-field\"}", downstreamArguments.get());
+        var responses = ((org.springframework.ai.chat.messages.ToolResponseMessage)
+                agent.getMessageList().getLast()).getResponses();
+        String bounded = responses.getFirst().responseData();
+        assertTrue(mapper.readTree(bounded).path("stored").asBoolean());
+        assertTrue(store.countTokens(bounded) <= 512);
+        String id = mapper.readTree(bounded).path("resultId").asText();
+        assertTrue(store.read("medical-agent:chat1", id, 0, 256).contains(id));
+    }
+
+    @Test
+    void serialToolAndRetrievalToolReceiveScopedContextAndBoundedResult() throws Exception {
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var store = new com.tianaiagent.toolgateway.ToolResultStore(
+                mapper, resultDirectory.toString(), 512, 1024, 24, 1_000_000);
+        ToolCallback source = simpleCallback("source", ignored -> "medical evidence ".repeat(2000));
+        ToolCallback reader = org.springframework.ai.support.ToolCallbacks.from(
+                new com.tianaiagent.tools.ToolResultTool(store))[0];
+        ToolCallAgent agent = new ToolCallAgent(new ToolCallback[]{source, reader}, executor, Set.of());
+        agent.setChatId("chat1");
+        agent.setToolResultStore(store);
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(new AssistantMessage("", Map.of(), List.of(
+                new AssistantMessage.ToolCall("call1", "function", "source", "{}")))))));
+        agent.act();
+        var result = ((org.springframework.ai.chat.messages.ToolResponseMessage) agent.getMessageList().getLast())
+                .getResponses().getFirst().responseData();
+        String id = mapper.readTree(result).path("resultId").asText();
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(new AssistantMessage("", Map.of(), List.of(
+                new AssistantMessage.ToolCall("call2", "function", "readToolResult",
+                        "{\"resultId\":\"" + id + "\",\"offset\":0,\"maxTokens\":256}")))))));
+        agent.act();
+        String page = ((org.springframework.ai.chat.messages.ToolResponseMessage) agent.getMessageList().getLast())
+                .getResponses().getFirst().responseData();
+        assertTrue(mapper.readTree(page).path("content").asText().startsWith("medical evidence"));
+        assertTrue(store.countTokens(page) <= 256);
+    }
 
     @AfterEach
     void close() {
         executor.shutdown();
+    }
+
+    @Test
+    void parallelLargeResultsRespectCombinedBatchBudget() throws Exception {
+        executor.setMaxPoolSize(3);
+        var mapper = new com.fasterxml.jackson.databind.ObjectMapper();
+        var store = new com.tianaiagent.toolgateway.ToolResultStore(
+                mapper, resultDirectory.toString(), 512, 1024, 24, 1_000_000);
+        ToolCallback first = simpleCallback("first", ignored -> "first result ".repeat(2000));
+        ToolCallback second = simpleCallback("second", ignored -> "second result ".repeat(2000));
+        ToolCallback third = simpleCallback("third", ignored -> "third result ".repeat(2000));
+        ToolCallAgent agent = new ToolCallAgent(new ToolCallback[]{first, second, third}, executor,
+                Set.of("first", "second", "third"));
+        agent.setChatId("parallel-chat");
+        agent.setToolResultStore(store);
+        AssistantMessage calls = new AssistantMessage("", Map.of(), List.of(
+                new AssistantMessage.ToolCall("call1", "function", "first", "{}"),
+                new AssistantMessage.ToolCall("call2", "function", "second", "{}"),
+                new AssistantMessage.ToolCall("call3", "function", "third", "{}")));
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(calls))));
+        agent.act();
+        var responses = ((org.springframework.ai.chat.messages.ToolResponseMessage)
+                agent.getMessageList().getLast()).getResponses();
+        int total = 0;
+        for (var response : responses) {
+            assertTrue(mapper.readTree(response.responseData()).path("stored").asBoolean());
+            total += store.countTokens(response.responseData());
+        }
+        assertTrue(total <= 1024);
     }
 
     @Test

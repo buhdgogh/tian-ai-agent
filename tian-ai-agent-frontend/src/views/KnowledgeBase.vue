@@ -5,6 +5,7 @@
       <div class="back-button" @click="goBack">返回</div>
       <h1 class="kb-title">⚕ 医疗循证知识库</h1>
       <div class="header-right">
+        <button class="wiki-open-btn" @click="wikiOpen = true">LLM Wiki</button>
         <span v-if="fileList.length" class="header-stats">
           {{ fileList.length }} 个文件 <template v-if="indexedCount">· {{ indexedCount }} 已索引</template>
         </span>
@@ -232,6 +233,7 @@
               <span class="qa-mark qa-mark--a">A</span>
               <div class="qa-response">
                 <div class="qa-a-text markdown-body" v-html="renderMarkdownWithCitations(qa.answer, qa.sources, 'kb-source-' + i)"></div>
+                <p v-if="qa.wikiPages?.length" class="wiki-answer-note">本次参考已发布 Wiki：{{ qa.wikiPages.map(page => page.title).join('、') }}<button @click="wikiOpen = true">查看知识版本</button></p>
                 <section v-if="qa.plan || qa.validation || qa.retrieval || qa.riskLevel" class="qa-quality">
                   <div class="qa-quality-head"><strong>检索与回答校验</strong><div class="qa-quality-badges"><span v-if="qa.riskLevel" :class="'qa-risk qa-risk-' + String(qa.riskLevel).toLowerCase()">{{ riskLabel(qa.riskLevel) }}</span><span :class="'qa-validation qa-validation-' + (qa.validation?.status || 'unknown')">{{ validationLabel(qa.validation?.status) }}</span></div></div>
                   <p v-if="qa.plan">回答类型：{{ qa.plan.answer_type || '未标注' }}<template v-if="qa.plan.sections?.length"> · {{ qa.plan.sections.join(' / ') }}</template></p>
@@ -313,6 +315,7 @@
       </section>
     </div>
 
+    <WikiPanel v-if="wikiOpen" :documents="fileList" @close="wikiOpen = false" />
     <!-- 悬浮提示 -->
     <transition name="toast">
       <div v-if="notice" class="notice-toast" :class="'notice-toast--' + notice.type">
@@ -330,6 +333,9 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { uploadKnowledgeFile, getKnowledgeFiles, deleteKnowledgeFile, queryKnowledgeBase, getTask } from '../api'
 import { emergencyMessage } from '../utils/medical'
+import WikiPanel from '../components/WikiPanel.vue'
+
+const wikiOpen = ref(false)
 
 const router = useRouter()
 
@@ -674,6 +680,7 @@ const doQuery = async () => {
       ? data
       : (data?.answer || data?.content || data?.message || '未获取到回答')
     qaHistory.value[index].sources = normalizeSources(Array.isArray(data?.sources) ? data.sources : [])
+    qaHistory.value[index].wikiPages = data?.wiki_pages || []
     qaHistory.value[index].plan = data?.plan
     qaHistory.value[index].validation = data?.validation
     qaHistory.value[index].retrieval = data?.retrieval
@@ -836,11 +843,12 @@ const normalizeSources = (sources) => {
     if (url && source?.documentId) documentUrls.set(source.documentId, url)
   })
   return sources.map((source, index) => ({
+    ...(source.metadata || {}),
     ...source,
     citation: source.citation || index + 1,
     fileName: source.fileName || source.title || source.documentName || '未命名来源',
-    publishedAt: source.publishedAt || source.publishDate,
-    displayContent: extractReadableContent(source?.quote),
+    publishedAt: source.publishedAt || source.publishDate || source.metadata?.publishedAt,
+    displayContent: source.text || extractReadableContent(source?.quote),
     originalUrl: (/^https?:\/\//i.test(source?.sourceUri || '') ? source.sourceUri : '') || findOriginalUrl(source?.quote) || documentUrls.get(source?.documentId) || ''
   }))
 }
@@ -860,6 +868,8 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
+.wiki-open-btn{margin-right:12px;padding:8px 13px;border:1px solid #bddbd2;border-radius:10px;background:#f2faf6;color:#0f766e;font:12px inherit;cursor:pointer}
+.wiki-answer-note{margin:10px 0;color:#577a70;font-size:12px}.wiki-answer-note button{margin-left:8px;border:0;background:transparent;color:#08786c;cursor:pointer}
 .kb-container {
   display: flex;
   flex-direction: column;

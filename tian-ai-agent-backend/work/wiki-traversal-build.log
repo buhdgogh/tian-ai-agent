@@ -1,0 +1,21 @@
+¾Ü¾ø·ÃÎÊ¡£
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ----------------< com.tianaiagent:tian-ai-agent-admin >-----------------
+[INFO] Building tian-ai-agent-admin 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- maven-resources-plugin:3.3.1:resources (default-resources) @ tian-ai-agent-admin ---
+[INFO] Copying 2 resources from src\main\resources to ..\tmp\admin-build\classes
+[INFO] Copying 4 resources from src\main\resources to ..\tmp\admin-build\classes
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.14.1:compile (default-compile) @ tian-ai-agent-admin ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 91 source files with javac [debug parameters release 21] to ..\tmp\admin-build\classes
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  21.911 s
+[INFO] Finished at: 2026-11-04T13:54:41+08:00
+[INFO] ------------------------------------------------------------------------

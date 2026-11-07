@@ -1,0 +1,281 @@
+
+> tian-ai-agent-frontend@0.0.0 test
+> node --test
+
+TAP version 13
+# Subtest: login redirects stay inside the application
+ok 1 - login redirects stay inside the application
+  ---
+  duration_ms: 2.9223
+  type: 'test'
+  ...
+# Subtest: explicit login and logout use the server session without automatic login
+    # Subtest: anonymous requests never log in automatically
+    ok 1 - anonymous requests never log in automatically
+      ---
+      duration_ms: 1.3855
+      type: 'test'
+      ...
+    # Subtest: successful login stores identity and logout clears it
+    ok 2 - successful login stores identity and logout clears it
+      ---
+      duration_ms: 1.4617
+      type: 'test'
+      ...
+    # Subtest: wrong password does not create a client identity
+    ok 3 - wrong password does not create a client identity
+      ---
+      duration_ms: 0.2568
+      type: 'test'
+      ...
+    # Subtest: a missing logout endpoint preserves the logged-in identity for retry
+    ok 4 - a missing logout endpoint preserves the logged-in identity for retry
+      ---
+      duration_ms: 0.301
+      type: 'test'
+      ...
+    # Subtest: an old current-user response cannot restore identity after logout
+    ok 5 - an old current-user response cannot restore identity after logout
+      ---
+      duration_ms: 0.5574
+      type: 'test'
+      ...
+# Error: EPERM: operation not permitted, mkdir 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_022fb490'
+#     at Object.mkdirSync (node:fs:1363:26)
+#     at runOptimizeDeps (file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45825:10)
+#     at file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45206:46
+    1..5
+ok 2 - explicit login and logout use the server session without automatic login
+  ---
+  duration_ms: 541.112
+  type: 'test'
+  ...
+# [Error: EPERM: operation not permitted, unlink 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_055bc550\\package.json'] {
+#   errno: -4048,
+#   code: 'EPERM',
+#   syscall: 'unlink',
+#   path: 'E:\\\\Code\\\\Projects\\\\Tian-AI-Agent-main\\\\tian-ai-agent-frontend\\\\node_modules\\\\.vite\\\\deps_temp_055bc550\\\\package.json'
+# }
+# [Error: EPERM: operation not permitted, unlink 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_055bc550\\package.json'] {
+#   errno: -4048,
+#   code: 'EPERM',
+#   syscall: 'unlink',
+#   path: 'E:\\\\Code\\\\Projects\\\\Tian-AI-Agent-main\\\\tian-ai-agent-frontend\\\\node_modules\\\\.vite\\\\deps_temp_055bc550\\\\package.json'
+# }
+# Subtest: session lifecycle creates records first, isolates history, and rejects stale responses
+    # Subtest: first send creates a database session before emitting its id
+    ok 1 - first send creates a database session before emitting its id
+      ---
+      duration_ms: 8.9103
+      type: 'test'
+      ...
+    # Subtest: switching medical to rag requests the correct history and discards late replies
+    ok 2 - switching medical to rag requests the correct history and discards late replies
+      ---
+      duration_ms: 9.1162
+      type: 'test'
+      ...
+    # Subtest: stop aborts the active request and keeps the cancelled reply
+    ok 3 - stop aborts the active request and keeps the cancelled reply
+      ---
+      duration_ms: 1.3365
+      type: 'test'
+      ...
+    # Subtest: unmount aborts work and suppresses late history updates
+    ok 4 - unmount aborts work and suppresses late history updates
+      ---
+      duration_ms: 0.6355
+      type: 'test'
+      ...
+# Error: EPERM: operation not permitted, mkdir 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_cb1107c0'
+#     at Object.mkdirSync (node:fs:1363:26)
+#     at runOptimizeDeps (file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45825:10)
+#     at file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45206:46
+#     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    1..4
+ok 3 - session lifecycle creates records first, isolates history, and rejects stale responses
+  ---
+  duration_ms: 426.0573
+  type: 'test'
+  ...
+# Error: EPERM: operation not permitted, mkdir 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_fda9c5b3'
+#     at Object.mkdirSync (node:fs:1363:26)
+#     at runOptimizeDeps (file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45825:10)
+#     at file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45206:46
+# Subtest: logout 404 offers a retry that calls logout again and then opens login
+ok 4 - logout 404 offers a retry that calls logout again and then opens login
+  ---
+  duration_ms: 347.9163
+  type: 'test'
+  ...
+# [Error: EPERM: operation not permitted, unlink 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_055bc550\\package.json'] {
+#   errno: -4048,
+#   code: 'EPERM',
+#   syscall: 'unlink',
+#   path: 'E:\\\\Code\\\\Projects\\\\Tian-AI-Agent-main\\\\tian-ai-agent-frontend\\\\node_modules\\\\.vite\\\\deps_temp_055bc550\\\\package.json'
+# }
+# Subtest: legacy agent URLs open the automatic assistant without a forced mode
+ok 5 - legacy agent URLs open the automatic assistant without a forced mode
+  ---
+  duration_ms: 11.3062
+  type: 'test'
+  ...
+# Subtest: one assistant automatically dispatches, reconnects and cancels server workflows
+    # Subtest: a simple question uses the same automatic entry without mode selection
+    ok 1 - a simple question uses the same automatic entry without mode selection
+      ---
+      duration_ms: 16.9943
+      type: 'test'
+      ...
+    # Subtest: a composite goal returns one answer with its dependency plan and review
+    ok 2 - a composite goal returns one answer with its dependency plan and review
+      ---
+      duration_ms: 19.3791
+      type: 'test'
+      ...
+# [Error: EPERM: operation not permitted, unlink 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_055bc550\\package.json'] {
+#   errno: -4048,
+#   code: 'EPERM',
+#   syscall: 'unlink',
+#   path: 'E:\\\\Code\\\\Projects\\\\Tian-AI-Agent-main\\\\tian-ai-agent-frontend\\\\node_modules\\\\.vite\\\\deps_temp_055bc550\\\\package.json'
+# }
+    # Subtest: refresh reconnects a persisted running task without submitting it again
+    ok 3 - refresh reconnects a persisted running task without submitting it again
+      ---
+      duration_ms: 6.1652
+      type: 'test'
+      ...
+    # Subtest: stop cancels the server task and preserves the confirmed cancelled state
+    ok 4 - stop cancels the server task and preserves the confirmed cancelled state
+      ---
+      duration_ms: 8.1024
+      type: 'test'
+      ...
+    # Subtest: a cancellation failure does not pretend that background work stopped
+    ok 5 - a cancellation failure does not pretend that background work stopped
+      ---
+      duration_ms: 31.8111
+      type: 'test'
+      ...
+    # Subtest: a result that completed during cancellation remains completed
+    ok 6 - a result that completed during cancellation remains completed
+      ---
+      duration_ms: 7.3644
+      type: 'test'
+      ...
+    # Subtest: a stopped question can be edited while an old response is still returning
+    ok 7 - a stopped question can be edited while an old response is still returning
+      ---
+      duration_ms: 14.9616
+      type: 'test'
+      ...
+    # Subtest: a rejected revision keeps the original question visible
+    ok 8 - a rejected revision keeps the original question visible
+      ---
+      duration_ms: 54.8659
+      type: 'test'
+      ...
+    # Subtest: completed answers cannot be edited through the stopped-question action
+    ok 9 - completed answers cannot be edited through the stopped-question action
+      ---
+      duration_ms: 6.3043
+      type: 'test'
+      ...
+# Error: EPERM: operation not permitted, mkdir 'E:\\Code\\Projects\\Tian-AI-Agent-main\\tian-ai-agent-frontend\\node_modules\\.vite\\deps_temp_f3320693'
+#     at Object.mkdirSync (node:fs:1363:26)
+#     at runOptimizeDeps (file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45825:10)
+#     at file:///E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-frontend/node_modules/vite/dist/node/chunks/dep-827b23df.js:45206:46
+#     at process.processTicksAndRejections (node:internal/process/task_queues:105:5)
+    1..9
+ok 6 - one assistant automatically dispatches, reconnects and cancels server workflows
+  ---
+  duration_ms: 555.041
+  type: 'test'
+  ...
+# Subtest: persisted pending and failed messages remain visible without content
+ok 7 - persisted pending and failed messages remain visible without content
+  ---
+  duration_ms: 7.6993
+  type: 'test'
+  ...
+# Subtest: agent history reconstructs tool path and only displays final answer
+ok 8 - agent history reconstructs tool path and only displays final answer
+  ---
+  duration_ms: 2.6372
+  type: 'test'
+  ...
+# Subtest: agent error events remain failures
+ok 9 - agent error events remain failures
+  ---
+  duration_ms: 0.7047
+  type: 'test'
+  ...
+# Subtest: continued legacy conversations also hide intermediate Agent thoughts
+ok 10 - continued legacy conversations also hide intermediate Agent thoughts
+  ---
+  duration_ms: 0.8266
+  type: 'test'
+  ...
+# Subtest: structured report and workflow review survive history conversion
+ok 11 - structured report and workflow review survive history conversion
+  ---
+  duration_ms: 2.5168
+  type: 'test'
+  ...
+# Subtest: backend error strings and identity errors have usable messages
+ok 12 - backend error strings and identity errors have usable messages
+  ---
+  duration_ms: 0.8366
+  type: 'test'
+  ...
+# Subtest: logout endpoint 404 is distinct from a missing conversation
+ok 13 - logout endpoint 404 is distinct from a missing conversation
+  ---
+  duration_ms: 1.2242
+  type: 'test'
+  ...
+# Subtest: superseded questions and partial answers stay out of visible history
+ok 14 - superseded questions and partial answers stay out of visible history
+  ---
+  duration_ms: 0.8363
+  type: 'test'
+  ...
+# Subtest: only the latest stopped or failed question can be edited
+ok 15 - only the latest stopped or failed question can be edited
+  ---
+  duration_ms: 3.3447
+  type: 'test'
+  ...
+# Subtest: pending tasks expose progress without claiming completion
+ok 16 - pending tasks expose progress without claiming completion
+  ---
+  duration_ms: 1.4299
+  type: 'test'
+  ...
+# Subtest: completed tasks combine final answer, plan and review into the same reply
+ok 17 - completed tasks combine final answer, plan and review into the same reply
+  ---
+  duration_ms: 0.5821
+  type: 'test'
+  ...
+# Subtest: failed and cancelled tasks preserve their actual status
+ok 18 - failed and cancelled tasks preserve their actual status
+  ---
+  duration_ms: 0.3047
+  type: 'test'
+  ...
+# Subtest: history retains task id, progress and review for reconnect
+ok 19 - history retains task id, progress and review for reconnect
+  ---
+  duration_ms: 1.0591
+  type: 'test'
+  ...
+1..19
+# tests 37
+# suites 0
+# pass 37
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 2358.1202

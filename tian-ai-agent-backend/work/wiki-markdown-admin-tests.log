@@ -1,0 +1,86 @@
+�ܾ����ʡ�
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ----------------< com.tianaiagent:tian-ai-agent-admin >-----------------
+[INFO] Building tian-ai-agent-admin 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- maven-resources-plugin:3.3.1:resources (default-resources) @ tian-ai-agent-admin ---
+[INFO] Copying 2 resources from src\main\resources to ..\tmp\admin-build\classes
+[INFO] Copying 4 resources from src\main\resources to ..\tmp\admin-build\classes
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.14.1:compile (default-compile) @ tian-ai-agent-admin ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 89 source files with javac [debug parameters release 21] to ..\tmp\admin-build\classes
+[INFO] 
+[INFO] --- maven-resources-plugin:3.3.1:testResources (default-testResources) @ tian-ai-agent-admin ---
+[INFO] skip non existing resourceDirectory E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\src\test\resources
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.14.1:testCompile (default-testCompile) @ tian-ai-agent-admin ---
+[INFO] Recompiling the module because of changed dependency.
+[INFO] Compiling 43 source files with javac [debug parameters release 21] to ..\tmp\admin-build\test-classes
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-ai-agent-admin/src/test/java/com/tianaiagent/storage/OssStorageClientTest.java: E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\src\test\java\com\tianaiagent\storage\OssStorageClientTest.java使用或覆盖了已过时的 API。
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-ai-agent-admin/src/test/java/com/tianaiagent/storage/OssStorageClientTest.java: 有关详细信息, 请使用 -Xlint:deprecation 重新编译。
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-ai-agent-admin/src/test/java/com/tianaiagent/rag/SemanticRagCacheTest.java: E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\src\test\java\com\tianaiagent\rag\SemanticRagCacheTest.java使用了未经检查或不安全的操作。
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-ai-agent-admin/src/test/java/com/tianaiagent/rag/SemanticRagCacheTest.java: 有关详细信息, 请使用 -Xlint:unchecked 重新编译。
+[INFO] 
+[INFO] --- maven-surefire-plugin:3.5.5:test (default-test) @ tian-ai-agent-admin ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running com.tianaiagent.controller.KnowledgeRetrievalControllerTest
+Java HotSpot(TM) 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+13:09:59.658 [main] INFO org.hibernate.validator.internal.util.Version -- HV000001: Hibernate Validator 8.0.3.Final
+13:10:00.775 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:00.775 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:00.778 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 2 ms
+13:10:01.029 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.029 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.029 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 0 ms
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 2.913 s -- in com.tianaiagent.controller.KnowledgeRetrievalControllerTest
+[INFO] Running com.tianaiagent.controller.WikiControllerTest
+13:10:01.284 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.284 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.284 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 0 ms
+13:10:01.317 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.317 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.317 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 0 ms
+13:10:01.352 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.352 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.352 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 0 ms
+13:10:01.381 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.381 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.382 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 1 ms
+13:10:01.431 [main] INFO org.springframework.mock.web.MockServletContext -- Initializing Spring TestDispatcherServlet ''
+13:10:01.432 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Initializing Servlet ''
+13:10:01.432 [main] INFO org.springframework.test.web.servlet.TestDispatcherServlet -- Completed initialization in 0 ms
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.288 s -- in com.tianaiagent.controller.WikiControllerTest
+[INFO] Running com.tianaiagent.mcp.LlamaIndexRagClientTest
+[INFO] Tests run: 9, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.122 s -- in com.tianaiagent.mcp.LlamaIndexRagClientTest
+[INFO] Running com.tianaiagent.rag.SemanticRagCacheTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.622 s -- in com.tianaiagent.rag.SemanticRagCacheTest
+[INFO] Running com.tianaiagent.service.WikiAnswerCacheTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.093 s -- in com.tianaiagent.service.WikiAnswerCacheTest
+[INFO] Running com.tianaiagent.tools.PublishedWikiToolTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.007 s -- in com.tianaiagent.tools.PublishedWikiToolTest
+[INFO] 
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 19, Failures: 0, Errors: 0, Skipped: 0
+[INFO] 
+[INFO] 
+[INFO] --- maven-jar-plugin:3.4.2:jar (default-jar) @ tian-ai-agent-admin ---
+[INFO] Building jar: E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\..\tmp\admin-build\tian-ai-agent-admin-0.0.1-SNAPSHOT.jar
+[INFO] 
+[INFO] --- spring-boot-maven-plugin:3.5.13:repackage (repackage) @ tian-ai-agent-admin ---
+[INFO] Replacing main artifact E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\..\tmp\admin-build\tian-ai-agent-admin-0.0.1-SNAPSHOT.jar with repackaged archive, adding nested dependencies in BOOT-INF/.
+[INFO] The original artifact has been renamed to E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-ai-agent-admin\..\tmp\admin-build\tian-ai-agent-admin-0.0.1-SNAPSHOT.jar.original
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  31.557 s
+[INFO] Finished at: 2026-11-04T13:10:06+08:00
+[INFO] ------------------------------------------------------------------------

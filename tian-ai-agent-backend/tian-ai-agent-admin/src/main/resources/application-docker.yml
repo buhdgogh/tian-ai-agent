@@ -1,0 +1,5 @@
+# Compose activates this profile through a JVM command-line argument.
+# Other RabbitMQ connection and audit parameters are inherited from application.yml.
+spring:
+  rabbitmq:
+    host: rabbitmq

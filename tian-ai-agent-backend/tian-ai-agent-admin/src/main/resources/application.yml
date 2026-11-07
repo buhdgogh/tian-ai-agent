@@ -1,6 +1,6 @@
 # 天医：循证医疗信息与安全支持智能体开发环境配置
 server:
-  port: ${SERVER_PORT:8123}
+  port: 8123
   servlet:
     context-path: /api
   tomcat:
@@ -18,7 +18,7 @@ knowledge-base:
     max-per-window: 100
     window-seconds: 60
   mcp:
-    endpoint: ${KNOWLEDGE_MCP_ENDPOINT:http://127.0.0.1:8081/mcp}
+    endpoint: http://127.0.0.1:8081/mcp
     parse-tool: parse_document
     parse-batch-tool: parse_documents_batch
     parse-status-tool: get_parse_task
@@ -37,23 +37,40 @@ knowledge-base:
     delete-tool: delete_document
   storage:
     # 开发环境中 Admin 与文档 MCP 均在本机运行，直接通过本地绝对路径交付原文。
-    # 部署到不同主机或容器文件系统不共享时，显式设置 KB_STORAGE_MODE=oss 并配置 OSS 凭据。
-    mode: ${KB_STORAGE_MODE:local}
+    # 文件系统不共享时，将 mode 改为 oss 并填写下面的 OSS 配置。
+    mode: local
   oss:
-    endpoint: ${OSS_ENDPOINT:oss-cn-wuhan-lr.aliyuncs.com}
-    access-key-id: ${OSS_ACCESS_KEY_ID:}
-    access-key-secret: ${OSS_ACCESS_KEY_SECRET:}
-    bucket: ${OSS_BUCKET:}
+    endpoint: oss-cn-wuhan-lr.aliyuncs.com
+    access-key-id: ""
+    access-key-secret: ""
+    bucket: ""
     # 仅供文档服务及时下载，缩短泄露窗口；不要记录完整URL。
-    url-expiration-seconds: ${OSS_URL_EXPIRATION_SECONDS:3600}
+    url-expiration-seconds: 3600
 
 spring:
+  rabbitmq:
+    host: 127.0.0.1
+    port: 5672
+    username: tian_ai_agent
+    password: 123456
+    virtual-host: tian_ai_agent_vhost
+    connection-timeout: 5s
+    publisher-confirm-type: correlated
+    publisher-returns: true
+    template:
+      mandatory: true
+    listener:
+      simple:
+        acknowledge-mode: manual
+        retry:
+          # Retries are durable TTL queue hops, not in-memory Spring listener retries.
+          enabled: false
   data:
     redis:
-      host: ${REDIS_HOST:localhost}
-      port: ${REDIS_PORT:6379}
-      database: ${REDIS_DATABASE:0}
-      timeout: ${REDIS_TIMEOUT:3000ms}
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 3000ms
       lettuce:
         pool:
           max-active: 8
@@ -67,7 +84,7 @@ spring:
       max-request-size: 200MB
   ai:
     dashscope:
-      api-key: ${DASHSCOPE_API_KEY:}
+      api-key: sk-ws-H.EDDMLMP.Awxr.MEUCIQCA7D8iAOKLZX1GJ7Uhc4WrJJroPjvoBeC3nhWEvep5DAIgK7zIalKnr83XLZTD3p-XV84OnszBD2Tl1kgPIk4GLIs
       chat:
         options:
           model: qwen-plus
@@ -90,27 +107,51 @@ knife4j:
     language: zh_cn
 
 search-api:
-  api-key: ${SEARCH_API_KEY:}
+  api-key: ""
 
 logging:
   level:
     # 医疗场景禁止 DEBUG 输出完整提示词和健康信息。
     org.springframework.ai: INFO
+    # Spring AI 1.0 的 OpenAI 适配器会在空响应警告中记录完整提示词。
+    org.springframework.ai.openai.OpenAiChatModel: ERROR
 
 agent:
+  model-routing:
+    # 留空沿用 spring.ai.dashscope；多厂商配置见 README。
+    providers: []
+  wiki:
+    max-depth: 2
+    max-pages: 6
+  user:
+    # 初始化一个可手动登录的账号，不自动登录。
+    default-username: zhangsan
+    default-password: "123456"
+  persistence:
+    # MySQL is authoritative. Set file only for explicit legacy development mode.
+    backend: mysql
+    import-legacy-tasks: false
+    mysql:
+      jdbc-url: jdbc:mysql://localhost:3306/tian_ai_agent?connectTimeout=5000&socketTimeout=10000&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+      username: root
+      password: "123456"
   memory:
-    backend: ${AGENT_MEMORY_BACKEND:redis}
+    backend: redis
     max-messages: 200
+    # 仅限制 ReAct 的历史输入，不删除 Redis/File 原始记录；按完整用户回合裁剪。
+    context-max-messages: 12
+    context-max-chars: 12000
     ttl-days: 30
     long-term:
-      enabled: ${AGENT_LONG_TERM_MEMORY_ENABLED:false}
-      compact-threshold: ${AGENT_MEMORY_COMPACT_THRESHOLD:80}
-      compact-every-messages: ${AGENT_MEMORY_COMPACT_EVERY:20}
-      semantic-top-k: ${AGENT_MEMORY_SEMANTIC_TOP_K:3}
+      enabled: false
+      compact-threshold: 12
+      # 兼容旧配置名，实际单位为达到阈值后的对话完成次数。
+      compact-every-messages: 3
+      semantic-top-k: 3
       mysql:
-        jdbc-url: ${AGENT_MEMORY_MYSQL_URL:localhost:3306}
-        username: ${AGENT_MEMORY_MYSQL_USERNAME:root}
-        password: ${AGENT_MEMORY_MYSQL_PASSWORD:123456}
+        jdbc-url: localhost:3306
+        username: root
+        password: "123456"
       mcp:
         upsert-tool: upsert_long_term_memory
         search-tool: search_long_term_memory
@@ -120,13 +161,37 @@ agent:
     max-pool-size: 12
     queue-capacity: 200
   tool-gateway:
+    audit-rabbit:
+      consumer-auto-startup: true
+      exchange: tian.tool-audit.v1
+      queue: tian.tool-audit.write.v1
+      routing-key: write
+      retry-exchange: tian.tool-audit.retry.v1
+      retry-queue-prefix: tian.tool-audit.retry.v1
+      dead-letter-exchange: tian.tool-audit.dead.v1
+      dead-letter-queue: tian.tool-audit.dead.v1
+      dead-letter-routing-key: dead
+      # Initial insert + at most 3 retries (4 inserts). Retry delays: 1s, 2s, 4s.
+      max-retries: 3
+      retry-delay-ms: 1000
+      confirm-timeout-ms: 5000
     blocked-tools: []
     max-argument-chars: 20000
     timeout-seconds: 30
     max-concurrency: 8
     audit-capacity: 500
+    results:
+      # CL100K本地估算，非Qwen精确分词；预算包含结果JSON及预览。
+      # 为多篇文献摘要、5~8个RAG片段及父级上下文保留空间；更大的全文仍外置。
+      max-tokens: 8192
+      # 每次ReAct act批次的新结果总预算，不包含历史/系统提示词。
+      batch-max-tokens: 24576
+      directory: ""
+      ttl-hours: 24
+      max-disk-bytes: 268435456
     # 只有无副作用且同一轮内互不依赖的工具允许并行执行。
     parallel-safe-tools:
+      - readToolResult
       - queryApprovedMedicalKnowledge
       - getKnowledgeChunkContext
       - searchPubMed
@@ -139,16 +204,16 @@ agent:
     max-parallel-steps: 4
   rag:
     evidence:
-      minimum-relevant-score: ${RAG_EVIDENCE_MIN_RELEVANT_SCORE:0.15}
-      minimum-sufficient-score: ${RAG_EVIDENCE_MIN_SUFFICIENT_SCORE:0.35}
+      minimum-relevant-score: 0.15
+      minimum-sufficient-score: 0.35
     semantic-cache:
-      enabled: ${RAG_SEMANTIC_CACHE_ENABLED:true}
-      similarity-threshold: ${RAG_CACHE_SIMILARITY_THRESHOLD:0.985}
-      lexical-threshold: ${RAG_CACHE_LEXICAL_THRESHOLD:0.82}
-      max-entries: ${RAG_CACHE_MAX_ENTRIES:500}
-      ttl-hours: ${RAG_CACHE_TTL_HOURS:12}
+      enabled: true
+      similarity-threshold: 0.985
+      lexical-threshold: 0.82
+      max-entries: 500
+      ttl-hours: 12
 
 medical-evidence:
   ncbi:
-    api-key: ${NCBI_API_KEY:}
-    email: ${NCBI_EMAIL:}
+    api-key: ""
+    email: ""

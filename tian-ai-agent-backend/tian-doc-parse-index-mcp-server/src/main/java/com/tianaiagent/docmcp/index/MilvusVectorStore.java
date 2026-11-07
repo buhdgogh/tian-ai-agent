@@ -7,6 +7,7 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.tianaiagent.docmcp.config.DocMcpProperties;
 import com.tianaiagent.docmcp.storage.KnowledgeRepository.ChunkRecord;
+import com.tianaiagent.docmcp.storage.KnowledgeRepository;
 import io.milvus.v2.client.ConnectConfig;
 import io.milvus.v2.client.MilvusClientV2;
 import io.milvus.v2.common.ConsistencyLevel;
@@ -38,7 +39,7 @@ import java.util.Set;
 
 /** Milvus 叶子 Chunk 向量存储，实现文档级增量覆盖和向量候选召回。 */
 @Component
-@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "milvus")
+@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "milvus", matchIfMissing = true)
 public class MilvusVectorStore implements VectorStore {
     private static final Logger log = LoggerFactory.getLogger(MilvusVectorStore.class);
     private static final String NODE_ID = "node_id";
@@ -55,17 +56,17 @@ public class MilvusVectorStore implements VectorStore {
     private static final String MEMORY_ID = "memory_id";
     private static final String OWNER_ID = "owner_id";
     private static final String MEMORY_TEXT = "memory_text";
-    private static final List<String> OUTPUT_FIELDS = List.of(
-            NODE_ID, DOC_ID, PARENT_ID, LEVEL, ORDINAL, TITLE, SOURCE_URI,
-            CONTENT_SHA256, CHUNK_TEXT, METADATA_JSON);
 
     private final DocMcpProperties properties;
     private final ObjectMapper mapper;
     private MilvusClientV2 client;
+    private final KnowledgeRepository repository;
+    private MilvusKeywordIndex keywordIndex;
 
-    public MilvusVectorStore(DocMcpProperties properties, ObjectMapper mapper) {
+    public MilvusVectorStore(DocMcpProperties properties, ObjectMapper mapper, KnowledgeRepository repository) {
         this.properties = properties;
         this.mapper = mapper;
+        this.repository = repository;
     }
 
     @PostConstruct
@@ -79,6 +80,8 @@ public class MilvusVectorStore implements VectorStore {
         client = new MilvusClientV2(builder.build());
         ensureCollection();
         ensureMemoryCollection();
+        keywordIndex = new MilvusKeywordIndex(client, properties, repository);
+        keywordIndex.initialize();
         log.info("Milvus向量库已连接: database={}, collection={}, dimensions={}",
                 database(), collection(), dimensions());
     }
@@ -160,6 +163,7 @@ public class MilvusVectorStore implements VectorStore {
             client.upsert(UpsertReq.builder()
                     .databaseName(database()).collectionName(collection()).data(rows).build());
         }
+        keywordIndex.upsert(leaves);
 
         Set<String> currentIds = new HashSet<>();
         leaves.forEach(chunk -> currentIds.add(chunk.nodeId()));
@@ -169,6 +173,7 @@ public class MilvusVectorStore implements VectorStore {
         if (!staleIds.isEmpty()) {
             client.delete(DeleteReq.builder().databaseName(database())
                     .collectionName(collection()).ids(staleIds).build());
+            keywordIndex.deleteIds(staleIds);
         }
     }
 
@@ -181,23 +186,28 @@ public class MilvusVectorStore implements VectorStore {
                 .data(List.of(new FloatVec(queryVector)))
                 .topK(Math.max(1, limit))
                 .limit(Math.max(1, limit))
-                .outputFields(OUTPUT_FIELDS)
+                .outputFields(List.of(NODE_ID))
                 .consistencyLevel(ConsistencyLevel.STRONG)
                 .build());
         if (response.getSearchResults().isEmpty()) return List.of();
         List<VectorCandidate> candidates = new ArrayList<>();
         for (SearchResp.SearchResult result : response.getSearchResults().getFirst()) {
-            Map<String, Object> entity = result.getEntity();
-            candidates.add(new VectorCandidate(toChunk(entity), Math.max(0, result.getScore())));
+            // H2 is authoritative even if an external upsert succeeded before a failed SQL commit.
+            repository.findChunk(String.valueOf(result.getId())).filter(ChunkRecord::leaf)
+                    .ifPresent(chunk -> candidates.add(new VectorCandidate(chunk, Math.max(0, result.getScore()))));
         }
         return candidates;
     }
 
     @Override
     public void deleteDocument(String documentId) {
+        keywordIndex.deleteDocument(documentId);
         client.delete(DeleteReq.builder().databaseName(database()).collectionName(collection())
                 .filter(DOC_ID + " == " + jsonString(documentId)).build());
     }
+
+    @Override public boolean supportsKeywordSearch() { return true; }
+    @Override public List<KeywordCandidate> searchKeywords(String query, int limit) { return keywordIndex.search(query, limit); }
 
     @Override
     public void upsertMemory(MemoryVector memory) {
@@ -256,13 +266,6 @@ public class MilvusVectorStore implements VectorStore {
         return row;
     }
 
-    private ChunkRecord toChunk(Map<String, Object> entity) {
-        return new ChunkRecord(text(entity, NODE_ID), text(entity, DOC_ID), text(entity, PARENT_ID),
-                integer(entity, LEVEL), true, integer(entity, ORDINAL), text(entity, TITLE),
-                text(entity, SOURCE_URI), text(entity, CONTENT_SHA256), text(entity, CHUNK_TEXT),
-                readMetadata(text(entity, METADATA_JSON)), null);
-    }
-
     private String writeMetadata(Map<String, Object> metadata) {
         try { return mapper.writeValueAsString(metadata == null ? Map.of() : metadata); }
         catch (Exception e) { throw new IllegalStateException("Milvus元数据序列化失败", e); }
@@ -278,13 +281,6 @@ public class MilvusVectorStore implements VectorStore {
         Object value = entity.get(field);
         if (value instanceof JsonElement json) return json.isJsonNull() ? "" : json.getAsString();
         return value == null ? "" : String.valueOf(value);
-    }
-
-    private static int integer(Map<String, Object> entity, String field) {
-        Object value = entity.get(field);
-        if (value instanceof Number number) return number.intValue();
-        if (value instanceof JsonElement json) return json.getAsInt();
-        return Integer.parseInt(String.valueOf(value));
     }
 
     private static String safe(String value) { return value == null ? "" : value; }
@@ -307,6 +303,9 @@ public class MilvusVectorStore implements VectorStore {
         value.put("database", database());
         value.put("collection", collection());
         value.put("memory_collection", memoryCollection());
+        value.put("keyword_collection", keywordIndex.collection());
+        value.put("keyword_search", "milvus-native-bm25");
+        value.put("analyzer", "jieba+lowercase+removepunct");
         value.put("dimensions", dimensions());
         value.put("vectors", client.getCollectionStats(GetCollectionStatsReq.builder()
                 .databaseName(database()).collectionName(collection()).build()).getNumOfEntities());

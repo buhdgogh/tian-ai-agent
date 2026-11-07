@@ -2,8 +2,9 @@ package com.tianaiagent.agent;
 
 import cn.hutool.core.collection.CollUtil;
 import cn.hutool.core.util.StrUtil;
-import com.alibaba.cloud.ai.dashscope.chat.DashScopeChatOptions;
 import com.tianaiagent.agent.model.AgentState;
+import com.tianaiagent.toolgateway.ToolResultStore;
+import com.tianaiagent.observability.ExecutionContext;
 import lombok.Data;
 import lombok.EqualsAndHashCode;
 import lombok.extern.slf4j.Slf4j;
@@ -15,7 +16,6 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
-import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.model.tool.ToolExecutionResult;
 import org.springframework.ai.tool.ToolCallback;
@@ -44,27 +44,26 @@ public class ToolCallAgent extends ReActAgent {
     // 保存工具调用信息的响应结果（要调用那些工具）
     private ChatResponse toolCallChatResponse;
 
-    // 工具调用管理者
-    private final ToolCallingManager toolCallingManager;
-
     // 同一轮多个无副作用工具的并行调度器
     private final AsyncTaskExecutor parallelToolCallExecutor;
     private final Set<String> parallelSafeTools;
 
     // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
     private final ChatOptions chatOptions;
+    private ToolResultStore toolResultStore;
+    private final String toolResultRunId = java.util.UUID.randomUUID().toString();
+    private final com.tianaiagent.wiki.WikiTraversalState wikiTraversalFallback = new com.tianaiagent.wiki.WikiTraversalState();
 
     public ToolCallAgent(ToolCallback[] availableTools,
                          AsyncTaskExecutor parallelToolCallExecutor,
                          Set<String> parallelSafeTools) {
         super();
         this.availableTools = availableTools;
-        this.toolCallingManager = ToolCallingManager.builder().build();
         this.parallelToolCallExecutor = parallelToolCallExecutor;
         this.parallelSafeTools = Set.copyOf(parallelSafeTools);
         // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
-        this.chatOptions = DashScopeChatOptions.builder()
-                .withInternalToolExecutionEnabled(false)
+        this.chatOptions = ToolCallingChatOptions.builder()
+                .internalToolExecutionEnabled(false)
                 .build();
     }
 
@@ -83,6 +82,7 @@ public class ToolCallAgent extends ReActAgent {
      */
     @Override
     public String think() {
+        com.tianaiagent.stream.AgentOutput.progress("分析问题与证据需求", "正在判断下一步是否需要检索或调用工具（第" + getCurrentStep() + "步）");
         // 1、仅在第一步追加行动提示词，避免每步重复导致上下文膨胀
         if (StrUtil.isNotBlank(getNextStepPrompt()) && getCurrentStep() == 1) {
             UserMessage userMessage = new UserMessage(getNextStepPrompt());
@@ -147,13 +147,23 @@ public class ToolCallAgent extends ReActAgent {
         }
 
         // 调用工具
+        if (chatOptions instanceof ToolCallingChatOptions options) {
+            options.setToolCallbacks(java.util.Arrays.asList(availableTools));
+            Map<String, Object> context = new HashMap<>();
+            if (options.getToolContext() != null) context.putAll(options.getToolContext());
+            context.put(ToolResultStore.SCOPE_KEY, toolResultScope());
+            options.setToolContext(context);
+        }
         Prompt prompt = new Prompt(getMessageList(), this.chatOptions);
         List<AssistantMessage.ToolCall> toolCalls = toolCallChatResponse.getResult().getOutput().getToolCalls();
+        if (toolResultStore != null && toolCalls.size() > toolResultStore.batchTokens() / 256) {
+            throw new IllegalStateException("Too many tool calls for the batch result token budget");
+        }
         ToolExecutionResult toolExecutionResult = executeToolCalls(
                 prompt, toolCallChatResponse.getResult().getOutput(), toolCalls);
         // 记录消息上下文，conversationHistory 已经包含了助手消息和工具调用返回的结果
-        setMessageList(toolExecutionResult.conversationHistory());
-        ToolResponseMessage toolResponseMessage = (ToolResponseMessage) CollUtil.getLast(toolExecutionResult.conversationHistory());
+        setMessageList(boundToolResults(toolExecutionResult.conversationHistory()));
+        ToolResponseMessage toolResponseMessage = (ToolResponseMessage) CollUtil.getLast(getMessageList());
 
         // 判断是否调用了终止工具
         boolean terminateToolCalled = toolResponseMessage.getResponses().stream()
@@ -171,25 +181,40 @@ public class ToolCallAgent extends ReActAgent {
         return results;
     }
 
+    /** 依赖图内部仍用完整结果；仅在写回模型上下文之前外置大结果。 */
+    private List<Message> boundToolResults(List<Message> history) {
+        if (toolResultStore == null || history.isEmpty()
+                || !(history.getLast() instanceof ToolResponseMessage original)) return history;
+        int remaining = toolResultStore.batchTokens();
+        List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>();
+        for (int index = 0; index < original.getResponses().size(); index++) {
+            var response = original.getResponses().get(index);
+            int reserve = (original.getResponses().size() - index - 1) * 256;
+            String bounded = toolResultStore.limit(toolResultScope(), response.name(),
+                    response.responseData(), remaining - reserve);
+            remaining -= toolResultStore.countTokens(bounded);
+            responses.add(new ToolResponseMessage.ToolResponse(response.id(), response.name(), bounded));
+        }
+        List<Message> boundedHistory = new ArrayList<>(history);
+        boundedHistory.set(boundedHistory.size() - 1, new ToolResponseMessage(responses, original.getMetadata()));
+        return boundedHistory;
+    }
+
+    private String toolResultScope() {
+        return StrUtil.isNotBlank(getChatId()) ? "medical-agent:" + getChatId() : "run:" + toolResultRunId;
+    }
+
     private ToolExecutionResult executeToolCalls(Prompt prompt, AssistantMessage assistantMessage,
                                                  List<AssistantMessage.ToolCall> toolCalls) {
-        if (toolCalls.size() < 2) return toolCallingManager.executeToolCalls(prompt, toolCallChatResponse);
         try {
             ToolDependencyGraph graph = ToolDependencyGraph.from(toolCalls);
-            if (graph.hasDependencies() || canExecuteInParallel(toolCalls)) {
-                return executeToolCallGraph(prompt, assistantMessage, graph);
-            }
-            // 没有依赖引用但含有写操作、流程控制或未知工具时，保持 Spring AI 串行语义。
-            return toolCallingManager.executeToolCalls(prompt, toolCallChatResponse);
+            // All paths use one execution boundary so serial calls also carry toolCallId.
+            // The graph runner parallelizes only layers consisting entirely of allowlisted tools.
+            return executeToolCallGraph(prompt, assistantMessage, graph);
         } catch (IllegalArgumentException error) {
             log.warn("工具依赖图无效: {}", error.getMessage());
             return dependencyErrorResult(prompt, assistantMessage, error.getMessage());
         }
-    }
-
-    private boolean canExecuteInParallel(List<AssistantMessage.ToolCall> toolCalls) {
-        return toolCalls.size() > 1
-                && toolCalls.stream().allMatch(call -> parallelSafeTools.contains(call.name()));
     }
 
     /** 按依赖图的拓扑层执行；同层全部为只读白名单工具时并行，否则保持原顺序串行。 */
@@ -301,7 +326,13 @@ public class ToolCallAgent extends ReActAgent {
     private ToolResponseMessage.ToolResponse executeToolCall(ResolvedToolCall resolved,
                                                               ToolContext toolContext) {
         String result;
-        try {
+        long started = System.nanoTime();
+        var sink = com.tianaiagent.stream.AgentOutput.current();
+        var trace = ExecutionContext.current();
+        String eventId = toolResultRunId + ":" + getCurrentStep() + ":" + trace.stepId() + ":" + trace.iteration() + ":"
+                + (resolved.call().id() == null ? java.util.UUID.randomUUID() : resolved.call().id());
+        if (sink != null) sink.event("tool_start", Map.of("id", eventId, "title", "调用工具 " + resolved.call().name(), "tool", resolved.call().name(), "status", "running"));
+        try (var ignored = ExecutionContext.open(ExecutionContext.current().tool(resolved.call().id()))) {
             result = resolved.callback().call(resolved.call().arguments(), toolContext);
         } catch (Exception e) {
             Throwable cause = e;
@@ -309,6 +340,8 @@ public class ToolCallAgent extends ReActAgent {
             String message = cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
             result = "Tool execution failed: " + message;
         }
+        if (sink != null) sink.event("tool_end", Map.of("id", eventId, "title", "调用工具 " + resolved.call().name(), "tool", resolved.call().name(),
+                "status", isFailedResult(result) ? "failed" : "completed", "detail", isFailedResult(result) ? "工具执行未完成" : "已收到工具结果", "durationMs", (System.nanoTime() - started) / 1_000_000));
         return new ToolResponseMessage.ToolResponse(
                 resolved.call().id(), resolved.call().name(), result == null ? "" : result);
     }
@@ -326,6 +359,9 @@ public class ToolCallAgent extends ReActAgent {
                 && options.getToolContext() != null) {
             context.putAll(options.getToolContext());
         }
+        var shared = ExecutionContext.current().wikiTraversal();
+        context.put(com.tianaiagent.wiki.WikiTraversalState.CONTEXT_KEY, shared == null ? wikiTraversalFallback : shared);
+        context.put(com.tianaiagent.wiki.WikiTraversalState.CONSUMER_KEY, toolResultRunId);
         return new ToolContext(context);
     }
 

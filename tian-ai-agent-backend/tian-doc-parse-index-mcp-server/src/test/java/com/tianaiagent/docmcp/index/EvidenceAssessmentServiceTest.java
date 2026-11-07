@@ -11,6 +11,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 class EvidenceAssessmentServiceTest {
+    @Test void evaluatesAbsoluteRelevanceInsteadOfAssumingFusionOrderIsConfidenceOrder() {
+        var service = new EvidenceAssessmentService(new DocMcpProperties());
+        assertEquals(EvidenceAssessmentService.Level.SUFFICIENT_EVIDENCE,
+                service.assess(List.of(Map.of("score", 0.2, "fusionScore", 0.9), Map.of("score", 0.8, "fusionScore", 0.5))).level());
+    }
     private final EvidenceAssessmentService service =
             new EvidenceAssessmentService(new DocMcpProperties());
 

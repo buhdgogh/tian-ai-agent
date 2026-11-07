@@ -1,64 +1,142 @@
 <template>
   <div class="medical-page">
-    <div class="mode-bar">
-      <div><span>回答模式</span><button v-for="item in modes" :key="item.id" :class="{active:mode===item.id}" :disabled="status==='connecting'" @click="mode=item.id">{{ item.label }}</button></div>
-      <small>{{ modeHint }}</small>
-    </div>
-    <ChatRoom ref="chat" :messages="messages" :connection-status="status" ai-type="medical" :emergency-text="emergency"
-      title="天医医疗信息助手" subtitle="先识别危险信号，再结合可追溯资料解释健康信息" welcome-icon="⚕"
-      :suggestions="['这些症状有哪些需要立即就医的危险信号？','结合知识库解释这份检查结果','生成一份结构化循证安全报告']"
-      @send-message="send" @stop-generation="stop" />
+    <div v-if="pageError" class="edit-error" role="alert">{{ pageError }} <button @click="refresh">刷新对话</button></div>
+    <ChatRoom :messages="messages" :connection-status="status" ai-type="medical" :emergency-text="emergency"
+      title="天医医疗助手" subtitle="描述你的问题或目标，系统会按需检索证据、分析并整理报告" welcome-icon="⚕"
+      :suggestions="['这些症状有哪些需要立即就医的危险信号？','检索证据并比较两种常见处理方案','结合检查结果分析风险，并整理一份循证报告']"
+      @send-message="send" @stop-generation="stop" @refresh-history="refresh" @edit-message="editQuestion" />
   </div>
 </template>
 <script setup>
-import {computed,onBeforeUnmount,ref,watch} from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import ChatRoom from '../components/ChatRoom.vue'
-import {chatMedicalRag,createMedicalEvidenceReport,getSessionMessages,streamMedicalAssistant} from '../api'
-import {apiError,chunkText,emergencyMessage,newChatId,normalizeHistory,normalizeSources,retryAfterSeconds} from '../utils/medical'
-const props=defineProps({chatIdProp:String}),emit=defineEmits(['update-history','update-chat-id'])
-const messages=ref([]),status=ref('disconnected'),emergency=ref(''),mode=ref('chat')
-const locallyCreatedChatId=ref('')
-let controller=null
-const countdownTimers=new Set()
-const modes=[{id:'chat',label:'安全问答'},{id:'rag',label:'循证检索'},{id:'report',label:'安全报告'}]
-const modeHint=computed(()=>({chat:'流式回答，并实时检查紧急风险',rag:'基于已审核知识库生成带来源的回答',report:'输出风险、证据、不确定性与下一步'}[mode.value]))
-const ensureId=()=>{if(props.chatIdProp)return props.chatIdProp;const id=newChatId('medical');locallyCreatedChatId.value=id;emit('update-chat-id',id);return id}
-const userPayload=(text,id)=>({message:text,question:text,chatId:id,sessionId:id})
-const addError=error=>{
-  const retry=retryAfterSeconds(error)
-  const item={content:`### 请求未完成\n\n${apiError(error)}`,isUser:false,time:Date.now()}
-  messages.value.push(item)
-  if(retry){let remaining=retry;item.content=`### 请求过于频繁\n\n请在 **${remaining} 秒**后重试。`;const timer=setInterval(()=>{remaining--;item.content=remaining>0?`### 请求过于频繁\n\n请在 **${remaining} 秒**后重试。`:'### 可以重试\n\n限流等待已结束，现在可以重新发送。';if(remaining<=0){clearInterval(timer);countdownTimers.delete(timer)}},1000);countdownTimers.add(timer)}
-}
-const checkEmergency=value=>{const hit=emergencyMessage(value);if(hit){emergency.value=hit;status.value='emergency';controller?.abort()}}
-const send=async text=>{
-  if(status.value==='connecting')return
-  emergency.value='';const id=ensureId();messages.value.push({content:text,isUser:true,time:Date.now()});status.value='connecting'
-  try{
-    if(mode.value==='chat'){
-      messages.value.push({content:'',isUser:false,time:Date.now()});const target=messages.value.at(-1);controller=new AbortController()
-      await streamMedicalAssistant(userPayload(text,id),raw=>{const part=chunkText(raw);target.content+=part.text; if(part.sources.length)target.sources=part.sources;if(part.report)target.report=part.report;checkEmergency(part.report||target.content)},controller.signal)
-      if(!target.content.trim()&&!target.sources?.length&&!target.report)target.content='### 未获取到回答\n\n服务未返回有效内容，请稍后重试。'
-    }else{
-      const request=mode.value==='rag'?chatMedicalRag:createMedicalEvidenceReport
-      const {data}=await request(userPayload(text,id));const report=mode.value==='report'?(data?.report||data):data?.report
-      const content=typeof data==='string'?data:(data?.answer||data?.content||data?.message||(report?'报告已生成。':'未获取到回答。'))
-      const sources=normalizeSources(data?.sources||report?.sources)
-      messages.value.push({content,isUser:false,time:Date.now(),sources,report,ragMeta:mode.value==='rag'?{plan:data?.plan,validation:data?.validation,retrieval:data?.retrieval,riskLevel:data?.riskLevel}:null,evidenceEmpty:mode.value==='rag'&&!sources.length})
-      checkEmergency(data||report||content)
+import { streamAgentResponse, getTask, interruptConversationTurn } from '../api'
+import { apiError, emergencyMessage } from '../utils/medical'
+import { editableLastQuestion } from '../utils/turns'
+import { applyTaskSnapshot, waitForTaskPoll } from '../utils/workflow'
+import { applyAgentStreamEvent, newTurnId } from '../utils/agentStream'
+import { useChatSession } from '../composables/useChatSession'
+
+const props = defineProps({ chatIdProp: String, sessionTypeProp: { type: String, default: 'agent' } })
+const emit = defineEmits(['update-history', 'update-chat-id'])
+const sessionType = computed(() => props.sessionTypeProp)
+const agentHistory = computed(() => sessionType.value === 'agent')
+const { messages, status, emergency, begin, stop: stopWaiting, markEmergency, loadHistory } = useChatSession(props, emit, sessionType, agentHistory)
+const stopping = ref(false), pageError = ref('')
+let tracking = null, currentReply = null, currentRun = null
+const refresh = () => { pageError.value=''; return loadHistory() }
+const checkEmergency = value => { const hit = emergencyMessage(value); if (hit) markEmergency(hit) }
+
+const followTask = async (taskId, target, run, initial) => {
+  const active = { taskId, target, run }
+  tracking = active
+  target.trackingError = ''
+  try {
+    let task = initial
+    while (run.active()) {
+      if (!task) task = (await getTask(taskId, { signal: run.signal })).data
+      if (!run.active()) return
+      const running = applyTaskSnapshot(target, task)
+      checkEmergency(target.content)
+      if (!running) return
+      await waitForTaskPoll(run.signal)
+      task = null
     }
-    emit('update-history')
-  }catch(error){const last=messages.value.at(-1);if(error?.name==='AbortError'){if(last&&!last.isUser)last.incomplete=true}else{if(last&&!last.isUser&&last.content)last.incomplete=true;addError(error)}}
-  finally{controller=null;if(status.value!=='emergency')status.value='disconnected'}
+  } catch (error) {
+    if (run.active()) target.trackingError = `暂时无法读取任务进度：${apiError(error)} 后台任务可能仍在执行，可刷新状态继续查看。`
+  } finally { if (tracking === active) tracking = null }
 }
-const stop=()=>{controller?.abort();status.value='disconnected'}
-watch(()=>props.chatIdProp,async id=>{
-  // 新会话 ID 是本组件刚创建的，不应当被当成“切换历史会话”而中断当前流式请求。
-  if(id&&id===locallyCreatedChatId.value){locallyCreatedChatId.value='';return}
-  controller?.abort();emergency.value='';messages.value=[]
-  if(!id)return
-  try{const {data}=await getSessionMessages(id,'medical');messages.value=normalizeHistory(data)}catch(error){addError(error)}
-},{immediate:true})
-onBeforeUnmount(()=>{controller?.abort();countdownTimers.forEach(timer=>clearInterval(timer))})
+
+const send = async (text, replaces = null) => {
+  const run = begin()
+  if (!run) return
+  pageError.value = ''
+  const oldMessages = [...messages.value]
+  const replacedReply = replaces ? oldMessages.find(message => !message.isUser && message.turnId === replaces) : null
+  const replacesTurnId = replacedReply?.submitted === false ? null : replaces
+  if (replaces) messages.value = oldMessages.filter(message => message.turnId !== replaces)
+  const turnId = newTurnId()
+  messages.value.push({ content: text, isUser: true, time: Date.now(), turnId, metadata: replacesTurnId ? { replacesTurnId } : {} })
+  messages.value.push({ content: '', isUser: false, time: Date.now(), turnId, status: 'RUNNING', streamPhase: 'analysis', trace: [], submitted: false })
+  const target = messages.value.at(-1)
+  currentReply = target
+  currentRun = run
+  try {
+    const chatId = await run.ensureId()
+    if (!run.active()) return
+    target.submitted = true
+    const completed = await streamAgentResponse({ message: text, chatId, sessionType: sessionType.value, turnId,
+      ...(replacesTurnId ? { replacesTurnId } : {}) }, event => {
+        if (!run.active()) return
+        applyAgentStreamEvent(target, event)
+        if (event.type === 'done') checkEmergency(target.content)
+      }, run.signal)
+    if (run.active() && !completed.sawDone) throw new Error('实时连接已断开，正在恢复任务状态。')
+  } catch (error) {
+    if (run.active()) {
+      const httpStatus = error.response?.status || error.status
+      if (replaces && httpStatus >= 400 && httpStatus < 500) {
+        messages.value = oldMessages
+        pageError.value = apiError(error)
+      } else if (target.metadata?.taskId) {
+        target.trackingError = '实时连接已断开，正在查询后台任务。'
+        await followTask(target.metadata.taskId, target, run)
+      } else {
+        target.status = 'FAILED'
+        target.error = apiError(error)
+        target.incomplete = true
+      }
+    }
+  } finally {
+    if (currentReply === target) { currentReply = null; currentRun = null }
+    run.finish()
+  }
+}
+
+const stop = async () => {
+  if (stopping.value) return
+  const target = tracking?.target || currentReply
+  const run = tracking?.run || currentRun
+  if (target && run) {
+    stopping.value = true
+    try {
+      if (target.submitted !== false) {
+        const { data } = await interruptConversationTurn(props.chatIdProp, target.turnId, sessionType.value)
+        if (!run.active()) return
+        target.status = data.status
+        if (data.status === 'COMPLETED') {
+          stopWaiting()
+          await loadHistory()
+          return
+        }
+        if (data.warning) target.trackingError = data.warning
+      }
+      stopWaiting()
+      if (target.submitted === false) target.status = 'CANCELLED'
+      target.incomplete = true
+    } catch (error) {
+      if (run.active()) target.trackingError = `停止回答失败：${apiError(error)} 可再次尝试停止。`
+    } finally { stopping.value = false }
+  } else {
+    stopWaiting()
+  }
+}
+
+const editQuestion = ({turnId, text}) => {
+  if (!text?.trim() || editableLastQuestion(messages.value)?.turnId !== turnId) return
+  return send(text.trim(), turnId)
+}
+
+// A page refresh can reconnect to a workflow using its persisted taskId.
+watch(messages, async history => {
+  await nextTick()
+  const target = history.find(message => !message.isUser && ['RUNNING', 'PENDING'].includes(message.status) && message.metadata?.taskId)
+  if (!target || status.value !== 'disconnected') return
+  const run = begin()
+  if (!run) return
+  try { await followTask(target.metadata.taskId, target, run) }
+  finally { run.finish() }
+})
+
 </script>
-<style scoped>.medical-page{height:100%;display:flex;flex-direction:column}.mode-bar{min-height:58px;padding:8px 24px;display:flex;align-items:center;justify-content:space-between;gap:15px;background:#fff;border-bottom:1px solid #e0eaea}.mode-bar>div{display:flex;align-items:center;gap:6px}.mode-bar span{font-size:12px;color:#718589;margin-right:6px}.mode-bar button{border:0;background:#f0f5f5;color:#577075;padding:7px 11px;border-radius:9px;font:12px inherit}.mode-bar button.active{background:#087f8c;color:#fff}.mode-bar small{color:#718589}@media(max-width:700px){.mode-bar{align-items:flex-start;overflow:auto}.mode-bar small,.mode-bar span{display:none}.mode-bar>div{white-space:nowrap}}</style>
+<style scoped>.medical-page{height:100%;min-height:0;display:flex;flex-direction:column}.edit-error{padding:10px 18px;background:#fff2dc;color:#875b08;font-size:13px}</style>

@@ -11,6 +11,12 @@ public interface VectorStore {
 
     List<VectorCandidate> search(float[] queryVector, int limit);
 
+    default boolean supportsKeywordSearch() { return false; }
+
+    default List<KeywordCandidate> searchKeywords(String query, int limit) {
+        throw new UnsupportedOperationException("原生关键词检索需要启用 Milvus BM25");
+    }
+
     void deleteDocument(String documentId);
 
     void upsertMemory(MemoryVector memory);
@@ -29,6 +35,7 @@ public interface VectorStore {
     }
 
     record VectorCandidate(ChunkRecord chunk, double denseScore) {}
+    record KeywordCandidate(ChunkRecord chunk, double bm25Score) {}
     record MemoryVector(String memoryId, String ownerId, String text,
                         Map<String, Object> metadata, float[] vector) {}
     record MemoryCandidate(String memoryId, String ownerId, String text,

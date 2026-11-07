@@ -10,7 +10,7 @@ import java.util.Comparator;
 
 /** 默认单机实现：向量保存在 H2，检索时在 JVM 中计算余弦相似度。 */
 @Component
-@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "local", matchIfMissing = true)
+@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "local")
 public class LocalVectorStore implements VectorStore {
     private final KnowledgeRepository repository;
 

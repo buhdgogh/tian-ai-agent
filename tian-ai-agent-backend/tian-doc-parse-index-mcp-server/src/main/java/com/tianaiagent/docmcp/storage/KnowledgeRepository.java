@@ -7,6 +7,8 @@ import jakarta.annotation.PostConstruct;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.beans.factory.annotation.Autowired;
+import com.tianaiagent.docmcp.wiki.WikiRepository;
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -22,6 +24,10 @@ public class KnowledgeRepository {
     private final JdbcTemplate jdbc;
     private final TransactionTemplate transactions;
     private final ObjectMapper mapper;
+    private WikiRepository wiki;
+
+    @Autowired
+    void setWikiRepository(WikiRepository wiki) { this.wiki = wiki; }
 
     public KnowledgeRepository(JdbcTemplate jdbc, TransactionTemplate transactions, ObjectMapper mapper) {
         this.jdbc = jdbc;
@@ -83,7 +89,16 @@ public class KnowledgeRepository {
     }
 
     public void replaceDocument(DocumentRecord document, List<ChunkRecord> chunks) {
+        replaceDocument(document, chunks, null);
+    }
+
+    public void replaceDocument(DocumentRecord document, List<ChunkRecord> chunks, String markdown) {
         transactions.executeWithoutResult(status -> {
+            if (wiki != null) {
+                String version = fingerprint(document, chunks);
+                wiki.sourceChanged(document.docId(), version);
+                archive(document, chunks, markdown, version);
+            }
             jdbc.update("DELETE FROM chunks WHERE doc_id=?", document.docId());
             jdbc.update("DELETE FROM documents WHERE doc_id=?", document.docId());
             jdbc.update("INSERT INTO documents(doc_id,title,source_uri,content_sha256,metadata_json,updated_at) VALUES (?,?,?,?,?,?)",
@@ -100,13 +115,50 @@ public class KnowledgeRepository {
 
     public boolean deleteDocument(String docId) {
         return Boolean.TRUE.equals(transactions.execute(status -> {
+            if (wiki != null) wiki.sourceDeleted(docId);
             jdbc.update("DELETE FROM chunks WHERE doc_id=?", docId);
             return jdbc.update("DELETE FROM documents WHERE doc_id=?", docId) > 0;
         }));
     }
 
+    public void registerWikiSource(String docId) {
+        if (wiki == null) return;
+        transactions.executeWithoutResult(status -> {
+            wiki.lockSources();
+            var documents = jdbc.query("SELECT * FROM documents WHERE doc_id=?", (rs, i) -> new DocumentRecord(rs.getString("doc_id"), rs.getString("title"), rs.getString("source_uri"), rs.getString("content_sha256"), readMap(rs.getString("metadata_json"))), docId);
+            if (!documents.isEmpty()) {
+                var document = documents.getFirst(); var chunks = loadDocumentChunks(docId);
+                String version = fingerprint(document, chunks);
+                wiki.sourceChanged(docId, version);
+                archive(document, chunks, null, version);
+            }
+        });
+    }
+
+    private String fingerprint(DocumentRecord document, List<ChunkRecord> chunks) {
+        return WikiRepository.key(document.docId() + "\n" + document.title() + "\n" + document.sourceUri()
+                + "\n" + writeJson(new java.util.TreeMap<>(document.metadata())) + "\n"
+                + chunks.stream().filter(ChunkRecord::leaf).sorted(java.util.Comparator.comparingInt(ChunkRecord::ordinal))
+                .map(c -> c.nodeId() + ":" + c.text()).collect(java.util.stream.Collectors.joining("\n")));
+    }
+
+    private void archive(DocumentRecord document, List<ChunkRecord> chunks, String markdown, String version) {
+        Map<String, Object> snapshot = new java.util.LinkedHashMap<>();
+        snapshot.put("doc_id", document.docId()); snapshot.put("source_version", version);
+        snapshot.put("title", document.title()); snapshot.put("source_uri", document.sourceUri()); snapshot.put("metadata", document.metadata());
+        snapshot.put("markdown", markdown == null ? "" : markdown);
+        snapshot.put("archive_format", markdown == null ? "canonical-chunks" : "parsed-markdown");
+        snapshot.put("chunks", chunks.stream().filter(ChunkRecord::leaf).map(c -> Map.of("node_id", c.nodeId(), "text", c.text())).toList());
+        wiki.archive(document.docId(), version, snapshot);
+    }
+
     public List<ChunkRecord> loadLeafChunks() {
         return jdbc.query("SELECT * FROM chunks WHERE leaf=TRUE", this::mapChunk);
+    }
+
+    public List<ChunkRecord> loadLeafChunksAfter(String afterId, int limit) {
+        return jdbc.query("SELECT * FROM chunks WHERE leaf=TRUE AND node_id>? ORDER BY node_id LIMIT ?",
+                this::mapChunk, afterId, limit);
     }
 
     public List<ChunkRecord> loadDocumentChunks(String docId) {

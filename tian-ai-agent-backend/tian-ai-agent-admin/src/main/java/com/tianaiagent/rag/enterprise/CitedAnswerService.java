@@ -16,11 +16,11 @@ public class CitedAnswerService {
     private final double minimumRelevantScore;
     private final double minimumSufficientScore;
 
-    public CitedAnswerService(HybridRetrievalService retrievalService, ChatModel dashscopeChatModel,
+    public CitedAnswerService(HybridRetrievalService retrievalService, ChatModel routedChatModel,
                               @Value("${agent.rag.evidence.minimum-relevant-score:0.15}") double minimumRelevantScore,
                               @Value("${agent.rag.evidence.minimum-sufficient-score:0.35}") double minimumSufficientScore) {
         this.retrievalService = retrievalService;
-        this.chatClient = ChatClient.builder(dashscopeChatModel).build();
+        this.chatClient = ChatClient.builder(routedChatModel).build();
         this.minimumRelevantScore = minimumRelevantScore;
         this.minimumSufficientScore = minimumSufficientScore;
     }

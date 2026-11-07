@@ -76,10 +76,15 @@ public class KnowledgeBaseController {
 
     @PostMapping("/retrieve")
     public JsonNode retrieve(@RequestBody QueryRequest request) {
-        return knowledgeBaseService.retrieve(request.question(), request.topK());
+        if (request.retrievalMode() != null && !request.retrievalMode().isBlank()
+                && !List.of("hybrid", "keyword", "dense").contains(request.retrievalMode())) {
+            throw new org.springframework.web.server.ResponseStatusException(HttpStatus.BAD_REQUEST, "retrievalMode只支持hybrid、keyword、dense");
+        }
+        return knowledgeBaseService.retrieve(request.question(), request.topK(), request.retrievalMode());
     }
 
     /** 检索问答请求体 */
-    public record QueryRequest(String question, Integer topK) {
+    public record QueryRequest(String question, Integer topK, String retrievalMode) {
+        public QueryRequest(String question, Integer topK) { this(question, topK, null); }
     }
 }

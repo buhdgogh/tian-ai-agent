@@ -1,5 +1,9 @@
 package com.tianaiagent.toolgateway;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tianaiagent.observability.ExecutionContext;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
@@ -36,6 +40,19 @@ public class ToolGateway {
     private final AsyncTaskExecutor executor;        // 工具执行线程池
     private final ArrayDeque<ToolAuditRecord> audits = new ArrayDeque<>();// 审计记录队列(环形队列，保留最近的500次工具调用记录)
     private final int auditCapacity;                 // 审计容量
+    private ToolAuditRepository repository;
+    private ToolAuditPublisher publisher;
+    private final ObjectMapper mapper = new ObjectMapper();
+
+    @Autowired
+    void setRepository(ObjectProvider<ToolAuditRepository> repositories) {
+        this.repository = repositories.getIfAvailable();
+    }
+
+    @Autowired
+    void setPublisher(ObjectProvider<ToolAuditPublisher> publishers) {
+        this.publisher = publishers.getIfAvailable();
+    }
 
     public ToolGateway(
             @Value("${agent.tool-gateway.blocked-tools:}") List<String> blockedTools,
@@ -104,20 +121,44 @@ public class ToolGateway {
         }
         boolean acquired = false;
         Future<String> future = null;
+        String result;
+        String failure = null;
         try {  // 并发限制
             acquired = permits.tryAcquire(1, TimeUnit.SECONDS);
             if (!acquired) throw new IllegalStateException("工具网关并发已满");
             future = executor.submit(invocation);
-            String result = future.get(timeoutSeconds, TimeUnit.SECONDS);
-            audit(auditId, toolName, "SUCCESS", started, digest, null);
-            return result;
+            result = future.get(timeoutSeconds, TimeUnit.SECONDS);
         } catch (Exception e) {
             if (future != null) future.cancel(true);
-            audit(auditId, toolName, "FAILED", started, digest, e.getMessage());
-            return "Tool execution failed: " + e.getMessage();
+            Throwable cause = e;
+            while (cause.getCause() != null) cause = cause.getCause();
+            String error = cause instanceof java.util.concurrent.TimeoutException ? "工具执行超过" + timeoutSeconds + "秒"
+                    : cause.getMessage() == null ? cause.getClass().getSimpleName() : cause.getMessage();
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            failure = error;
+            result = "Tool execution failed: " + error;
         } finally {
             if (acquired) permits.release();
         }
+        String error = failure == null ? businessError(result) : failure;
+        audit(auditId, toolName, error == null ? "SUCCESS" : "FAILED", started, digest, error);
+        return result;
+    }
+
+    /** Observability for direct MCP/module operations, without changing their timeout or retry semantics. */
+    public <T> T observeOperation(String name, String arguments, java.util.function.Supplier<T> operation) {
+        long started = System.nanoTime();
+        String id = UUID.randomUUID().toString().replace("-", "");
+        T result;
+        try { result = operation.get(); }
+        catch (RuntimeException error) {
+            audit(id, name, "FAILED", started, digest(arguments),
+                    error.getMessage() == null ? error.getClass().getSimpleName() : error.getMessage());
+            throw error;
+        }
+        String error = result instanceof String text ? businessError(text) : null;
+        audit(id, name, error == null ? "SUCCESS" : "FAILED", started, digest(arguments), error);
+        return result;
     }
 
     /**
@@ -125,7 +166,18 @@ public class ToolGateway {
      * @return 返回工具调用列表（列表逆置，第一条是最近的一次调用）
      */
     public synchronized List<ToolAuditRecord> recentAudits() {
-        return audits.stream().toList().reversed();
+        return findAudits(null, null, null, null, auditCapacity, 0);
+    }
+
+    public synchronized List<ToolAuditRecord> findAudits(String taskId, String ownerId, String chatId,
+                                                        String status, int limit, int offset) {
+        if (repository != null) return repository.find(taskId, ownerId, chatId, status, limit, offset);
+        return audits.stream().toList().reversed().stream()
+                .filter(a -> taskId == null || taskId.equals(a.taskId()))
+                .filter(a -> ownerId == null || ownerId.equals(a.ownerId()))
+                .filter(a -> chatId == null || chatId.equals(a.chatId()))
+                .filter(a -> status == null || status.equals(a.status()))
+                .skip(Math.max(0, offset)).limit(Math.max(1, Math.min(500, limit))).toList();
     }
 
     /**
@@ -137,12 +189,34 @@ public class ToolGateway {
      * @param digest
      * @param error
      */
-    private synchronized void audit(String id, String toolName, String status, long started,
+    private void audit(String id, String toolName, String status, long started,
                                     String digest, String error) {
-        audits.addLast(new ToolAuditRecord(id, toolName, status,
+        var trace = ExecutionContext.current();
+        ToolAuditRecord record = new ToolAuditRecord(id, toolName, status,
                 TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started), digest, error,
-                Instant.now().toString()));
-        while (audits.size() > auditCapacity) audits.removeFirst();
+                Instant.now().toString(), trace.taskId(), trace.ownerId(), trace.chatId(), trace.stepId(),
+                trace.iteration(), trace.toolCallId());
+        if (publisher != null) { publisher.publish(record); return; }
+        if (repository != null) throw new IllegalStateException("MySQL工具审计必须配置RabbitMQ生产者");
+        synchronized (this) {
+            audits.addLast(record);
+            while (audits.size() > auditCapacity) audits.removeFirst();
+        }
+    }
+
+    private String businessError(String result) {
+        if (result == null) return "工具未返回结果";
+        if (result.startsWith("Tool execution failed:") || result.startsWith("Error ")) return result;
+        try {
+            var json = mapper.readTree(result);
+            if (json != null && ((json.has("ok") && !json.path("ok").asBoolean())
+                    || json.path("isError").asBoolean(false))) {
+                var error = json.path("error");
+                return error.isTextual() ? error.asText() : error.isMissingNode() || error.isNull()
+                        ? "工具返回业务错误" : error.toString();
+            }
+        } catch (Exception ignored) { /* Plain text results are supported. */ }
+        return null;
     }
 
     /**

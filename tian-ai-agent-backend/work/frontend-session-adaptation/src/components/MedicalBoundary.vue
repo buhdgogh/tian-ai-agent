@@ -1,0 +1,2 @@
+<template><div class="medical-boundary" role="note"><strong>医疗安全边界</strong><span>本系统仅提供健康信息、循证资料解释与就医沟通支持，不能替代医生诊断、药师审方或急救服务；紧急情况请立即拨打 120。</span></div></template>
+<style scoped>.medical-boundary{min-height:34px;display:flex;align-items:center;justify-content:center;gap:9px;padding:7px 16px;background:#edf6f6;border-top:1px solid #d4e4e4;color:#526c71;font-size:11px;line-height:1.45;flex-shrink:0}.medical-boundary strong{color:#086c77;white-space:nowrap}@media(max-width:700px){.medical-boundary{align-items:flex-start}.medical-boundary span{max-width:82%}}</style>

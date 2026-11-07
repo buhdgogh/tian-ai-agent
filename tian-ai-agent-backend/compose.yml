@@ -100,6 +100,23 @@ services:
       start_period: 30s
     restart: unless-stopped
 
+  rabbitmq:
+    image: rabbitmq:4.1-management
+    hostname: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+      - ./deploy/rabbitmq/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf:ro
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    restart: unless-stopped
+
   doc-mcp:
     build:
       context: ./tian-doc-parse-index-mcp-server
@@ -128,6 +145,7 @@ services:
       - doc_mcp_data:/app/data
       - doc_mcp_parsed:/app/parsed
       - doc_mcp_runtime:/app/runtime
+      - ./docs/wiki:/app/docs/wiki
       - admin_data:/app/tmp:ro
     depends_on:
       milvus:
@@ -138,6 +156,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    entrypoint: ["sh", "-c", "exec java $$JAVA_OPTS -jar /app/app.jar --spring.profiles.active=docker"]
     environment:
       SERVER_PORT: 8123
       KNOWLEDGE_MCP_ENDPOINT: http://doc-mcp:8081/mcp
@@ -146,10 +165,19 @@ services:
       REDIS_HOST: redis
       REDIS_PORT: 6379
       AGENT_LONG_TERM_MEMORY_ENABLED: "true"
+      AGENT_PERSISTENCE_BACKEND: mysql
+      AGENT_IMPORT_LEGACY_TASKS: ${AGENT_IMPORT_LEGACY_TASKS:-false}
+      AGENT_MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-tian_agent}?useSSL=false&allowPublicKeyRetrieval=true&connectTimeout=5000&socketTimeout=10000&serverTimezone=Asia/Shanghai&characterEncoding=utf8
+      AGENT_MYSQL_USERNAME: ${MYSQL_USER:-tian_agent}
+      AGENT_MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
       AGENT_MEMORY_MYSQL_URL: jdbc:mysql://mysql:3306/${MYSQL_DATABASE:-tian_agent}?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=Asia/Shanghai&characterEncoding=utf8
       AGENT_MEMORY_MYSQL_USERNAME: ${MYSQL_USER:-tian_agent}
       AGENT_MEMORY_MYSQL_PASSWORD: ${MYSQL_PASSWORD:?set MYSQL_PASSWORD in .env}
       DASHSCOPE_API_KEY: ${DASHSCOPE_API_KEY:?set DASHSCOPE_API_KEY in .env}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_MODEL: ${OPENAI_MODEL:-}
+      SPRING_APPLICATION_JSON: ${SPRING_APPLICATION_JSON:-}
       SEARCH_API_KEY: ${SEARCH_API_KEY:-}
       JAVA_OPTS: ${ADMIN_JAVA_OPTS:--XX:MaxRAMPercentage=75.0}
     ports:
@@ -160,6 +188,8 @@ services:
       redis:
         condition: service_healthy
       mysql:
+        condition: service_healthy
+      rabbitmq:
         condition: service_healthy
       doc-mcp:
         condition: service_healthy
@@ -172,6 +202,7 @@ volumes:
   doc_mcp_runtime:
   redis_data:
   mysql_data:
+  rabbitmq_data:
   etcd_data:
   minio_data:
   milvus_data:

@@ -1,0 +1,135 @@
+[INFO] Scanning for projects...
+[INFO] 
+[INFO] ----------< com.tianaiagent:tian-doc-parse-index-mcp-server >-----------
+[INFO] Building tian-doc-parse-index-mcp-server 0.0.1-SNAPSHOT
+[INFO]   from pom.xml
+[INFO] --------------------------------[ jar ]---------------------------------
+[INFO] 
+[INFO] --- maven-resources-plugin:3.3.1:resources (default-resources) @ tian-doc-parse-index-mcp-server ---
+[INFO] Copying 1 resource from src\main\resources to target\classes
+[INFO] Copying 0 resource from src\main\resources to target\classes
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.14.1:compile (default-compile) @ tian-doc-parse-index-mcp-server ---
+[INFO] Nothing to compile - all classes are up to date.
+[INFO] 
+[INFO] --- maven-resources-plugin:3.3.1:testResources (default-testResources) @ tian-doc-parse-index-mcp-server ---
+[INFO] skip non existing resourceDirectory E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server\src\test\resources
+[INFO] 
+[INFO] --- maven-compiler-plugin:3.14.1:testCompile (default-testCompile) @ tian-doc-parse-index-mcp-server ---
+[INFO] Recompiling the module because of changed source code.
+[INFO] Compiling 14 source files with javac [debug parameters release 21] to target\test-classes
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-doc-parse-index-mcp-server/src/test/java/com/tianaiagent/docmcp/wiki/WikiIntegrationTest.java: E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server\src\test\java\com\tianaiagent\docmcp\wiki\WikiIntegrationTest.java使用了未经检查或不安全的操作。
+[INFO] /E:/Code/Projects/Tian-AI-Agent-main/tian-ai-agent-backend/tian-doc-parse-index-mcp-server/src/test/java/com/tianaiagent/docmcp/wiki/WikiIntegrationTest.java: 有关详细信息, 请使用 -Xlint:unchecked 重新编译。
+[INFO] 
+[INFO] --- maven-surefire-plugin:3.5.5:test (default-test) @ tian-doc-parse-index-mcp-server ---
+[INFO] Using auto detected provider org.apache.maven.surefire.junitplatform.JUnitPlatformProvider
+[INFO] 
+[INFO] -------------------------------------------------------
+[INFO]  T E S T S
+[INFO] -------------------------------------------------------
+[INFO] Running com.tianaiagent.docmcp.index.EmbeddingServiceTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.448 s -- in com.tianaiagent.docmcp.index.EmbeddingServiceTest
+[INFO] Running com.tianaiagent.docmcp.index.HierarchicalChunkerTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.013 s -- in com.tianaiagent.docmcp.index.HierarchicalChunkerTest
+[INFO] Running com.tianaiagent.docmcp.index.IndexServiceHybridTest
+Java HotSpot(TM) 64-Bit Server VM warning: Sharing is only supported for boot loader classes because bootstrap classpath has been appended
+[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.910 s -- in com.tianaiagent.docmcp.index.IndexServiceHybridTest
+[INFO] Running com.tianaiagent.docmcp.index.MilvusBm25IntegrationTest
+[WARNING] Tests run: 1, Failures: 0, Errors: 0, Skipped: 1, Time elapsed: 0 s -- in com.tianaiagent.docmcp.index.MilvusBm25IntegrationTest
+[INFO] Running com.tianaiagent.docmcp.index.MilvusKeywordIndexTest
+13:27:27.703 [main] INFO com.tianaiagent.docmcp.index.MilvusKeywordIndex -- Milvus BM25索引就绪 collection=knowledge_chunks_bm25_v1, backfilledChunks=2
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.415 s -- in com.tianaiagent.docmcp.index.MilvusKeywordIndexTest
+[INFO] Running com.tianaiagent.docmcp.McpIntegrationTest
+13:27:27.824 [main] INFO org.springframework.test.context.support.AnnotationConfigContextLoaderUtils -- Could not detect default configuration classes for test class [com.tianaiagent.docmcp.McpIntegrationTest]: McpIntegrationTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+13:27:27.973 [main] INFO org.springframework.boot.test.context.SpringBootTestContextBootstrapper -- Found @SpringBootConfiguration com.tianaiagent.docmcp.DocParseIndexMcpApplication for test class com.tianaiagent.docmcp.McpIntegrationTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::               (v3.5.13)
+
+2026-11-04T13:27:28.512+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.McpIntegrationTest  : Starting McpIntegrationTest using Java 21.0.8 with PID 12356 (started by zxt in E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server)
+2026-11-04T13:27:28.515+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.McpIntegrationTest  : No active profile set, falling back to 1 default profile: "default"
+2026-11-04T13:27:29.670+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Starting...
+2026-11-04T13:27:29.907+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-1 - Added connection conn0: url=jdbc:h2:mem:mcp-test user=SA
+2026-11-04T13:27:29.909+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-1 - Start completed.
+2026-11-04T13:27:30.590+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] o.s.b.t.m.w.SpringBootMockServletContext : Initializing Spring TestDispatcherServlet ''
+2026-11-04T13:27:30.590+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] o.s.t.web.servlet.TestDispatcherServlet  : Initializing Servlet ''
+2026-11-04T13:27:30.591+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] o.s.t.web.servlet.TestDispatcherServlet  : Completed initialization in 1 ms
+2026-11-04T13:27:30.628+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.McpIntegrationTest  : Started McpIntegrationTest in 2.491 seconds (process running for 7.431)
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.379 s -- in com.tianaiagent.docmcp.McpIntegrationTest
+[INFO] Running com.tianaiagent.docmcp.parse.MineruClientTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.130 s -- in com.tianaiagent.docmcp.parse.MineruClientTest
+[INFO] Running com.tianaiagent.docmcp.parse.SourceLoaderTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.152 s -- in com.tianaiagent.docmcp.parse.SourceLoaderTest
+[INFO] Running com.tianaiagent.docmcp.parse.TikaDocumentParserTest
+[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.949 s -- in com.tianaiagent.docmcp.parse.TikaDocumentParserTest
+[INFO] Running com.tianaiagent.docmcp.query.EvidenceAssessmentServiceTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.005 s -- in com.tianaiagent.docmcp.query.EvidenceAssessmentServiceTest
+[INFO] Running com.tianaiagent.docmcp.wiki.WikiFileStoreTest
+[INFO] Tests run: 2, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.094 s -- in com.tianaiagent.docmcp.wiki.WikiFileStoreTest
+[INFO] Running com.tianaiagent.docmcp.wiki.WikiIntegrationTest
+2026-11-04T13:27:32.456+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] t.c.s.AnnotationConfigContextLoaderUtils : Could not detect default configuration classes for test class [com.tianaiagent.docmcp.wiki.WikiIntegrationTest]: WikiIntegrationTest does not declare any static, non-private, non-final, nested classes annotated with @Configuration.
+2026-11-04T13:27:32.492+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] .b.t.c.SpringBootTestContextBootstrapper : Found @SpringBootConfiguration com.tianaiagent.docmcp.DocParseIndexMcpApplication for test class com.tianaiagent.docmcp.wiki.WikiIntegrationTest
+
+  .   ____          _            __ _ _
+ /\\ / ___'_ __ _ _(_)_ __  __ _ \ \ \ \
+( ( )\___ | '_ | '_| | '_ \/ _` | \ \ \ \
+ \\/  ___)| |_)| | | | | || (_| |  ) ) ) )
+  '  |____| .__|_| |_|_| |_\__, | / / / /
+ =========|_|==============|___/=/_/_/_/
+
+ :: Spring Boot ::               (v3.5.13)
+
+2026-11-04T13:27:32.541+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.t.docmcp.wiki.WikiIntegrationTest      : Starting WikiIntegrationTest using Java 21.0.8 with PID 12356 (started by zxt in E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server)
+2026-11-04T13:27:32.541+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.t.docmcp.wiki.WikiIntegrationTest      : No active profile set, falling back to 1 default profile: "default"
+2026-11-04T13:27:33.010+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Starting...
+2026-11-04T13:27:33.012+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.pool.HikariPool        : HikariPool-2 - Added connection conn10: url=jdbc:h2:mem:wiki-test user=SA
+2026-11-04T13:27:33.012+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] com.zaxxer.hikari.HikariDataSource       : HikariPool-2 - Start completed.
+2026-11-04T13:27:33.227+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.t.docmcp.wiki.WikiIntegrationTest      : Started WikiIntegrationTest in 0.73 seconds (process running for 10.029)
+2026-11-04T13:27:33.542+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiFileSync   : Wiki Markdown file sync pending; retry scheduled. exception=FileSyncFailure
+2026-11-04T13:27:33.543+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=b560d457-7650-4c0f-a2b0-4efd71ca38f1 pages=2
+2026-11-04T13:27:33.776+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=36c39bc0-db09-4ace-b15a-71a06b66fc02 pages=2
+2026-11-04T13:27:34.021+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=ea5f7595-3198-48f1-aa15-0cce205faf66 pages=2
+2026-11-04T13:27:34.363+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=06f25e9f-fe18-4bfa-8f5b-47f6950f368d pages=2
+2026-11-04T13:27:34.579+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=9fe1f814-a559-46a2-b457-c3ea524d3f4d pages=2
+2026-11-04T13:27:34.739+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=ea9cedb7-ab55-4c96-9c48-554a8696da5c pages=2
+2026-11-04T13:27:34.851+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=eab33490-594b-4fc1-895d-e14799d650a3 pages=2
+2026-11-04T13:27:35.076+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=911fb928-b745-4c73-a827-9dcb689bd1ed pages=2
+2026-11-04T13:27:35.229+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=e79a2946-cc43-4151-a073-8eb0938ae9dc pages=2
+2026-11-04T13:27:35.608+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=99359c99-c908-4893-aa2a-e24a502ffdbb pages=2
+2026-11-04T13:27:35.794+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=94a893eb-4302-4514-ac2e-a0a73e5c42c8 pages=2
+2026-11-04T13:27:35.851+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=6e454a2b-e2fd-4510-8d44-1caf719238e1 code=CALL_BUDGET_EXCEEDED
+2026-11-04T13:27:35.873+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=4d31af01-6e03-493e-a0e7-68ce6a8dc224 code=CHAT_NOT_CONFIGURED
+2026-11-04T13:27:35.910+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=e935542c-257d-4cf9-9aca-30d9d2fae301 code=MODEL_REQUEST_FAILED
+2026-11-04T13:27:35.929+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=e31a3d5a-50a9-4d73-8386-68761f053d08 code=UNGROUNDED_FACT
+2026-11-04T13:27:35.934+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=e31a3d5a-50a9-4d73-8386-68761f053d08 code=UNGROUNDED_FACT
+2026-11-04T13:27:35.939+08:00  WARN 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile stopped job=e31a3d5a-50a9-4d73-8386-68761f053d08 code=UNGROUNDED_FACT
+2026-11-04T13:27:36.003+08:00  INFO 12356 --- [tian-doc-parse-index-mcp-server] [           main] c.tianaiagent.docmcp.wiki.WikiCompiler   : Wiki compile succeeded job=1b73b33f-4c8d-4e3f-9272-5fd77e69049c pages=2
+[INFO] Tests run: 14, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 3.681 s -- in com.tianaiagent.docmcp.wiki.WikiIntegrationTest
+[INFO] Running com.tianaiagent.docmcp.wiki.WikiMarkdownTest
+[INFO] Tests run: 3, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.018 s -- in com.tianaiagent.docmcp.wiki.WikiMarkdownTest
+[INFO] Running com.tianaiagent.docmcp.wiki.WikiModelClientTest
+[INFO] Tests run: 4, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 0.057 s -- in com.tianaiagent.docmcp.wiki.WikiModelClientTest
+[INFO] 
+[INFO] Results:
+[INFO] 
+[INFO] Tests run: 42, Failures: 0, Errors: 0, Skipped: 1
+[INFO] 
+[INFO] 
+[INFO] --- maven-jar-plugin:3.4.2:jar (default-jar) @ tian-doc-parse-index-mcp-server ---
+[INFO] Building jar: E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server\target\tian-doc-parse-index-mcp-server-0.0.1-SNAPSHOT.jar
+[INFO] 
+[INFO] --- spring-boot-maven-plugin:3.5.13:repackage (repackage) @ tian-doc-parse-index-mcp-server ---
+[INFO] Replacing main artifact E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server\target\tian-doc-parse-index-mcp-server-0.0.1-SNAPSHOT.jar with repackaged archive, adding nested dependencies in BOOT-INF/.
+[INFO] The original artifact has been renamed to E:\Code\Projects\Tian-AI-Agent-main\tian-ai-agent-backend\tian-doc-parse-index-mcp-server\target\tian-doc-parse-index-mcp-server-0.0.1-SNAPSHOT.jar.original
+[INFO] ------------------------------------------------------------------------
+[INFO] BUILD SUCCESS
+[INFO] ------------------------------------------------------------------------
+[INFO] Total time:  22.772 s
+[INFO] Finished at: 2026-11-04T13:27:39+08:00
+[INFO] ------------------------------------------------------------------------

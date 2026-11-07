@@ -9,6 +9,8 @@ import com.tianaiagent.docmcp.parse.DocumentParseService;
 import com.tianaiagent.docmcp.parse.DocumentParseService.ParseRequest;
 import com.tianaiagent.docmcp.query.ChatService;
 import com.tianaiagent.docmcp.storage.KnowledgeRepository;
+import com.tianaiagent.docmcp.wiki.WikiService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
@@ -24,6 +26,7 @@ public class McpToolService {
     private final KnowledgeRepository repository;
     private final ObjectMapper mapper;
     private final SemanticMemoryService semanticMemory;
+    @Autowired private WikiService wiki;
 
     public McpToolService(DocumentParseService parsing, IndexService indexing, ChatService chat,
                           KnowledgeRepository repository, ObjectMapper mapper,
@@ -39,6 +42,20 @@ public class McpToolService {
     public Object call(String name, JsonNode arguments) {
         try {
             return switch (name) {
+                case "wiki_status" -> ApiResponse.ok(wiki.status());
+                case "wiki_read_note" -> ApiResponse.ok(wiki.read(text(arguments, "page_id", true), bool(arguments, "published_only", true)));
+                case "wiki_search" -> ApiResponse.ok(Map.of("pages", wiki.search(optionalText(arguments, "query", ""), optionalText(arguments, "tag", ""), integer(arguments, "limit", 20), bool(arguments, "published_only", true))));
+                case "wiki_source" -> ApiResponse.ok(wiki.source(text(arguments, "doc_id", true), text(arguments, "source_version", true)));
+                case "wiki_compile" -> ApiResponse.ok(wiki.compile(text(arguments, "doc_id", true)));
+                case "wiki_jobs" -> ApiResponse.ok(arguments.hasNonNull("job_id") ? wiki.job(text(arguments, "job_id", true)) : Map.of("jobs", wiki.jobs()));
+                case "wiki_pages" -> ApiResponse.ok(Map.of("pages", wiki.pages()));
+                case "wiki_page" -> ApiResponse.ok(arguments.hasNonNull("revision_id") ? wiki.revision(text(arguments, "revision_id", true)) : Map.of("history", wiki.history(text(arguments, "page_id", true))));
+                case "wiki_publish" -> {
+                    wiki.publish(text(arguments, "page_id", true), text(arguments, "revision_id", true), text(arguments, "reviewer", true));
+                    yield ApiResponse.ok(Map.of("published", true));
+                }
+                case "wiki_lint" -> ApiResponse.ok(wiki.lint());
+                case "wiki_events" -> ApiResponse.ok(Map.of("events", wiki.events()));
                 case "parse_document" -> parseDocument(arguments);
                 case "parse_documents_batch" -> parseBatch(arguments);
                 case "get_parse_task" -> getTask(text(arguments, "task_id", true));
@@ -113,7 +130,7 @@ public class McpToolService {
 
     private Object retrieve(JsonNode args) {
         int topK = integer(args, "top_k", 8);
-        IndexService.RetrievalResult result = indexing.retrieve(text(args, "question", true), topK);
+        IndexService.RetrievalResult result = indexing.retrieve(text(args, "question", true), topK, optionalText(args, "retrieval_mode", "hybrid"));
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("question", result.question());
         data.put("count", result.sources().size());
@@ -135,7 +152,9 @@ public class McpToolService {
     private Object deleteDocument(JsonNode args) {
         String docId = text(args, "doc_id", true);
         if (!indexing.deleteDocument(docId)) return ApiResponse.error("document_not_found", "文档不存在: " + docId);
-        return ApiResponse.ok(Map.of("doc_id", docId, "deleted", true));
+        boolean verified = repository.loadDocumentChunks(docId).isEmpty();
+        return ApiResponse.ok(Map.of("doc_id", docId, "deleted", true, "verified", verified,
+                "storage", "java-document-index", "remaining_nodes", verified ? 0 : repository.loadDocumentChunks(docId).size()));
     }
 
     private Object listDocuments() {
@@ -148,7 +167,8 @@ public class McpToolService {
         Map<String, Object> vectorStatus = indexing.status();
         result.put("vector_store", vectorStatus);
         if (vectorStatus.containsKey("vectors")) result.put("vectors", vectorStatus.get("vectors"));
-        result.put("retrieval", Map.of("mode", "hybrid-vector-keyword-mmr"));
+        result.put("retrieval", Map.of("mode", vectorStatus.containsKey("keyword_search") ? "hybrid-milvus-bm25-rrf-mmr" : "hybrid-vector-keyword-mmr"));
+        if (wiki != null) result.put("wiki", wiki.status());
         return ApiResponse.ok(result);
     }
 
@@ -212,11 +232,22 @@ public class McpToolService {
 
     public List<Map<String, Object>> tools() {
         return List.of(
+                tool("wiki_status", "查看LLM Wiki编译、发布和知识版本状态", object(Map.of(), List.of())),
+                tool("wiki_read_note", "读取Markdown知识页、标题、标签、出链及反向链接；默认只读有效发布版本，管理界面可显式读取草稿", object(Map.of("page_id", string(), "published_only", boolSchema()), List.of("page_id"))),
+                tool("wiki_search", "按正文关键词和标签搜索Wiki；默认只检索有效发布版本", object(Map.of("query", string(), "tag", string(), "limit", Map.of("type", "integer", "minimum", 1, "maximum", 100), "published_only", boolSchema()), List.of())),
+                tool("wiki_source", "按资料ID和来源版本读取不可变原文快照，用于核对历史引用", object(Map.of("doc_id", string(), "source_version", string()), List.of("doc_id", "source_version"))),
+                tool("wiki_compile", "异步预编译指定资料为Wiki草稿；失败或未配置模型时可重新提交", object(Map.of("doc_id", string()), List.of("doc_id"))),
+                tool("wiki_jobs", "查看最近100条Wiki编译任务或指定任务的进度、错误码与Token用量", object(Map.of("job_id", string()), List.of())),
+                tool("wiki_pages", "列出Wiki实体页、概念页和综合分析页的分类路径、最新版本和发布状态", object(Map.of(), List.of())),
+                tool("wiki_page", "查看指定页面的版本历史或指定版本的知识内容与原文引用", object(Map.of("page_id", string(), "revision_id", string()), List.of())),
+                tool("wiki_publish", "仅由审核管理接口在人工确认后发布指定Wiki版本；reviewer来自登录身份", object(Map.of("page_id", string(), "revision_id", string(), "reviewer", string()), List.of("page_id", "revision_id", "reviewer"))),
+                tool("wiki_lint", "检查Wiki来源失效、引用断链及页面链接；不替代语义审核", object(Map.of(), List.of())),
+                tool("wiki_events", "查看Wiki编译、失效与发布操作的追加日志", object(Map.of(), List.of())),
                 tool("parse_document", "使用MinerU/Tika异步解析单个文档，并在Java侧自动切块、Embedding和索引", object(parseProperties(Map.of("file_source", string(), "doc_id", string(), "content_sha256", string(), "metadata", object(Map.of(), List.of()))), List.of("file_source"))),
                 tool("parse_documents_batch", "使用MinerU/Tika异步解析多个文档，并在Java侧自动切块、Embedding和索引", object(parseProperties(Map.of("file_sources", array(string()), "content_sha256s", object(Map.of(), List.of()), "doc_ids", object(Map.of(), List.of()), "document_metadatas", object(Map.of(), List.of()))), List.of("file_sources"))),
                 tool("get_parse_task", "查询异步文档解析与索引任务状态", object(Map.of("task_id", string()), List.of("task_id"))),
                 tool("index_document", "增量新增或更新一个文档，不影响其他文档", object(Map.of("doc_id", string(), "text", string(), "title", string(), "source_uri", string(), "content_sha256", string(), "page_number", integerSchema()), List.of("doc_id", "text"))),
-                tool("retrieve_knowledge", "执行向量与关键词混合召回，返回原文证据", object(Map.of("question", string(), "top_k", integerSchema()), List.of("question"))),
+                tool("retrieve_knowledge", "检索原文证据：默认Dense与Milvus BM25融合；retrieval_mode=keyword时独立关键词召回", object(Map.of("question", string(), "top_k", integerSchema(), "retrieval_mode", Map.of("type", "string", "enum", List.of("hybrid", "keyword", "dense"), "default", "hybrid")), List.of("question"))),
                 tool("get_chunk_context", "根据召回的Chunk ID返回4096/1024/256父子上下文链", object(Map.of("chunk_id", string()), List.of("chunk_id"))),
                 tool("query_knowledge", "基于知识库证据生成带来源回答", object(Map.of("question", string(), "top_k", integerSchema()), List.of("question"))),
                 tool("delete_document", "按文档ID删除文档及全部索引", object(Map.of("doc_id", string()), List.of("doc_id"))),

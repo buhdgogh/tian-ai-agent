@@ -11,8 +11,29 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.argThat;
 
 class LlamaIndexRagClientTest {
+    @Test void javaDocumentDeletionDoesNotRequireLegacyRedisFields() {
+        when(mcpToolClient.call(any(), anyMap())).thenReturn("{\"ok\":true,\"data\":{\"doc_id\":\"a\",\"deleted\":true,\"verified\":true,\"storage\":\"java-document-index\",\"remaining_nodes\":0}}");
+        assertTrue(client.delete("a").verified());
+    }
+
+    @Test void wikiPublicationErrorsRemainActionableAndToolNamesAreRestricted() {
+        when(mcpToolClient.call(eq("wiki_publish"), anyMap())).thenReturn("{\"ok\":false,\"error\":{\"code\":\"invalid_argument\",\"message\":\"版本已失效\"}}");
+        assertThrows(IllegalArgumentException.class, () -> client.wiki("wiki_publish", java.util.Map.of()));
+        assertThrows(IllegalArgumentException.class, () -> client.wiki("delete_document", java.util.Map.of()));
+    }
+
+    @Test void forwardsIndependentKeywordSearchModeToMcp() {
+        when(mcpToolClient.getRetrieveTool()).thenReturn("retrieve_knowledge");
+        when(mcpToolClient.call(any(), anyMap())).thenReturn("{\"ok\":true,\"data\":{\"retrieval_mode\":\"milvus-bm25-mmr\",\"sources\":[]}}");
+        assertEquals("milvus-bm25-mmr", client.retrieve("HbA1c", 5, "keyword").path("retrieval_mode").asText());
+        verify(mcpToolClient).call(eq("retrieve_knowledge"), argThat(args -> args.get("retrieval_mode").equals("keyword") && args.get("question").equals("HbA1c")));
+        assertThrows(IllegalArgumentException.class, () -> client.retrieve("HbA1c", 5, "invalid"));
+    }
 
     private final McpToolClient mcpToolClient = mock(McpToolClient.class);
     private final LlamaIndexRagClient client =

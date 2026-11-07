@@ -44,11 +44,25 @@ public class LlamaIndexRagClient {
         return parseBusinessData(json, "问答");
     }
 
-    /** 只执行 Python 向量召回，返回原始节点文本、文档 ID 和相似度。 */
+    /** 从Java文档MCP召回证据片段。 */
     public JsonNode retrieve(String question, int topK) {
         String json = mcpToolClient.call(mcpToolClient.getRetrieveTool(),
                 Map.of("question", question, "top_k", topK));
         return parseBusinessData(json, "检索");
+    }
+
+    public JsonNode retrieve(String question, int topK, String retrievalMode) {
+        if (retrievalMode == null || retrievalMode.isBlank()) return retrieve(question, topK);
+        if (!java.util.List.of("hybrid", "keyword", "dense").contains(retrievalMode)) throw new IllegalArgumentException("非法retrievalMode");
+        String json = mcpToolClient.call(mcpToolClient.getRetrieveTool(),
+                Map.of("question", question, "top_k", topK, "retrieval_mode", retrievalMode));
+        return parseBusinessData(json, "检索");
+    }
+
+    public JsonNode wiki(String tool, Map<String, Object> arguments) {
+        if (!java.util.Set.of("wiki_status", "wiki_read_note", "wiki_search", "wiki_source", "wiki_compile", "wiki_jobs", "wiki_pages", "wiki_page", "wiki_publish", "wiki_lint", "wiki_events").contains(tool))
+            throw new IllegalArgumentException("不支持的Wiki操作");
+        return parseBusinessData(mcpToolClient.call(tool, arguments), "Wiki");
     }
 
     /**
@@ -63,6 +77,7 @@ public class LlamaIndexRagClient {
             if (!root.path("ok").asBoolean(false)) {
                 JsonNode error = root.path("error");
                 String message = error.path("message").asText(error.toString());
+                if ("Wiki".equals(operation) && "invalid_argument".equals(error.path("code").asText())) throw new IllegalArgumentException(message);
                 throw new IllegalStateException("Python " + operation + "失败: " + message);
             }
             JsonNode data = root.get("data");
@@ -84,6 +99,11 @@ public class LlamaIndexRagClient {
         String json = mcpToolClient.call(mcpToolClient.getDeleteTool(),
                 Map.of("doc_id", docId));
         JsonNode data = parseBusinessData(json, "删除文档索引");
+        if ("java-document-index".equals(data.path("storage").asText())) {
+            if (!data.path("deleted").asBoolean() || !data.path("verified").asBoolean() || data.path("remaining_nodes").asInt(-1) != 0)
+                throw new IllegalStateException("Java文档删除未通过校验");
+            return new DeleteResult(data.path("doc_id").asText(docId), true, true, 0, 0, 0);
+        }
         DeleteResult result = new DeleteResult(
                 data.path("doc_id").asText(docId),
                 data.path("deleted").asBoolean(false),

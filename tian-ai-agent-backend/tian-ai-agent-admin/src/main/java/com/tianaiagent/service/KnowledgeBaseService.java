@@ -442,7 +442,10 @@ public class KnowledgeBaseService {
         }
         int limit = topK == null ? 8 : Math.max(1, Math.min(topK, 20));
         String normalizedQuestion = question.trim();
-        String version = knowledgeVersion();
+        // A publication or source invalidation must invalidate both exact and semantic answer caches.
+        JsonNode wikiState = llamaIndexRagClient.wiki("wiki_status", Map.of());
+        String version = knowledgeVersion() + ":wiki:" + wikiState.path("version").asText("0")
+                + ":enabled:" + wikiState.path("enabled").asBoolean(false);
         JsonNode result = semanticRagCache.get(normalizedQuestion, limit, version).orElseGet(() -> {
             JsonNode fresh = llamaIndexRagClient.queryWithSources(normalizedQuestion, limit);
             semanticRagCache.put(normalizedQuestion, limit, version, fresh);
@@ -466,7 +469,7 @@ public class KnowledgeBaseService {
                     "status", String.valueOf(indexMetaMap.getOrDefault(id, Map.of()).getOrDefault("status", "")),
                     "chunks", String.valueOf(indexMetaMap.getOrDefault(id, Map.of()).getOrDefault("chunkCount", "")))));
             return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256")
-                    .digest(objectMapper.writeValueAsBytes(state)));
+                    .digest(objectMapper.writeValueAsBytes(Map.of("retrievalPipeline", "milvus-bm25-rrf-v1", "documents", state))));
         } catch (Exception e) {
             throw new IllegalStateException("计算知识库版本失败", e);
         }
@@ -474,11 +477,16 @@ public class KnowledgeBaseService {
 
     /** 只从Java文档MCP召回原始片段，不经过回答模型。 */
     public JsonNode retrieve(String question, Integer topK) {
+        return retrieve(question, topK, null);
+    }
+
+    public JsonNode retrieve(String question, Integer topK, String retrievalMode) {
         if (question == null || question.isBlank()) {
             throw new RuntimeException("查询内容不能为空");
         }
         int limit = topK == null ? 8 : Math.max(1, Math.min(topK, 20));
-        return llamaIndexRagClient.retrieve(question.trim(), limit);
+        return retrievalMode == null || retrievalMode.isBlank() ? llamaIndexRagClient.retrieve(question.trim(), limit)
+                : llamaIndexRagClient.retrieve(question.trim(), limit, retrievalMode);
     }
 
     /** 校验文档的元信息是否完整 */

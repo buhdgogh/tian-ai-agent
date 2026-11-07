@@ -1,19 +1,31 @@
 <template>
   <div class="app-frame">
+  <div v-if="currentUser && route.name !== 'Login'" class="account-bar">
+    <span>当前用户：{{ currentUser.username }}</span>
+    <button :disabled="signingOut" @click="handleLogout">{{ signingOut ? '正在退出…' : '退出登录' }}</button>
+  </div>
+  <div v-if="logoutError" class="session-notice" role="alert">
+    {{ logoutError }} <button :disabled="signingOut" @click="handleLogout">重试退出</button>
+  </div>
   <div class="app-layout">
     <AppSidebar 
       v-if="showSidebar"
       :aiType="aiType"
       :currentChatId="currentChatId"
+      :currentChatType="currentChatType"
       :historyList="historyList"
+      :username="currentUser?.username || currentUser?.userId"
+      :is-creating="creating"
       @new-chat="handleNewChat"
       @select-chat="handleSelectChat"
       @delete-chat="handleDeleteChat"
       @clear-chat="handleClearChat"
     />
     <main class="main-content">
+      <div v-if="notice" class="session-notice" role="alert">{{ notice }} <button @click="loadHistory">重试</button></div>
       <router-view 
         :chatIdProp="currentChatId" 
+        :sessionTypeProp="currentChatType"
         @update-history="loadHistory" 
         @update-chat-id="handleUpdateChatId"
       />
@@ -24,95 +36,95 @@
 </template>
 
 <script setup>
-import { computed, ref, watch, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { computed, ref, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import AppSidebar from './components/AppSidebar.vue'
 import MedicalBoundary from './components/MedicalBoundary.vue'
-import { getSessions, deleteSession } from './api'
+import { createSession, getSessions, deleteSession } from './api'
+import { currentUser, loadCurrentUser, signOut } from './stores/user'
+import { apiError } from './utils/medical'
 
-const route = useRoute()
-
-// 只有在聊天相关页面显示侧边栏
-const showSidebar = computed(() => {
-  return ['/medical', '/medical-agent'].includes(route.path)
-})
-
-const aiType = computed(() => {
-  if (route.path === '/medical') return 'medical'
-  if (route.path === '/medical-agent') return 'agent'
-  return 'default'
-})
-
-const currentChatId = ref('')
-const historyList = ref([])
-
-// 加载会话列表
+const route = useRoute(), router = useRouter()
+const signingOut = ref(false), logoutError = ref('')
+const currentChatId = ref(''), currentChatType = ref('agent'), historyList = ref([]), notice = ref(''), creating = ref(false)
+const showSidebar = computed(() => route.path === '/medical')
+const aiType = computed(() => showSidebar.value ? 'medical' : 'default')
+let listVersion = 0, contextVersion = 0
+const handleLogout = async () => {
+  if (signingOut.value) return
+  signingOut.value = true
+  logoutError.value = ''
+  try { await signOut(); await router.replace('/login') }
+  catch (error) { logoutError.value = apiError(error) }
+  finally { signingOut.value = false }
+}
 const loadHistory = async () => {
-  if (!showSidebar.value) return
+  if (!showSidebar.value) return []
+  const version = ++listVersion
   try {
-    const res = await getSessions(aiType.value)
-    historyList.value = Array.isArray(res.data) ? res.data : (res.data?.items || res.data?.sessions || [])
+    await loadCurrentUser()
+    const groups = await Promise.all(['agent', 'medical', 'rag'].map(async type => {
+      const { data } = await getSessions(type)
+      const rows = Array.isArray(data) ? data : data?.items || data?.sessions || []
+      return rows.map(chat => ({ ...chat, type }))
+    }))
+    if (version !== listVersion || !showSidebar.value) return []
+    historyList.value = groups.flat().sort((a, b) => String(b.updatedAt || b.createdAt || '').localeCompare(String(a.updatedAt || a.createdAt || '')))
+    notice.value = ''
     return historyList.value
   } catch (error) {
-    console.error('Failed to load history:', error)
-    historyList.value = []
+    if (version === listVersion) notice.value = apiError(error)
     return []
   }
 }
-
-const loadInitialHistory = async () => {
+const handleSelectChat = chat => { currentChatType.value = chat.type || 'agent'; currentChatId.value = chat.id }
+watch(showSidebar, async () => {
+  const version = ++contextVersion
+  listVersion++
+  currentChatId.value = ''
+  currentChatType.value = 'agent'
+  historyList.value = []
+  notice.value = ''
   const sessions = await loadHistory()
-  if (!currentChatId.value && sessions?.length) currentChatId.value = sessions[0].id
-}
-
-// 监听路由变化，切换智能体时重新加载历史记录
-watch(() => aiType.value, async (newType) => {
-  if (newType !== 'default') {
-    currentChatId.value = ''
-    await loadInitialHistory()
-  }
-})
-
-// 初始化加载
-onMounted(() => {
-  loadInitialHistory()
-})
-
-const handleUpdateChatId = (id) => {
-  currentChatId.value = id
-}
-
-const handleNewChat = () => {
-  // 生成新对话 ID
-  const token = crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
-  const newId = (aiType.value === 'medical' ? 'medical_' : 'agent_') + token
-  currentChatId.value = newId
-}
-
-const handleSelectChat = (chat) => {
-  currentChatId.value = chat.id
-}
-
-const handleDeleteChat = async (chat) => {
-  if (!chat?.id || !window.confirm(`确定删除对话“${chat.title || '未命名对话'}”吗？`)) return
+  if (version === contextVersion && !currentChatId.value && sessions.length) handleSelectChat(sessions[0])
+}, { immediate: true })
+const handleUpdateChatId = id => { currentChatId.value = id }
+const handleNewChat = async () => {
+  if (creating.value) return
+  creating.value = true
+  const version = contextVersion
   try {
-    await deleteSession(chat.id, aiType.value)
-    if (currentChatId.value === chat.id) currentChatId.value = ''
+    await loadCurrentUser()
+    const { data } = await createSession({ type: 'agent' })
+    if (version !== contextVersion) return
+    handleSelectChat({ id: data.id, type: 'agent' })
+    await loadHistory()
+  } catch (error) { if (version === contextVersion) notice.value = apiError(error) }
+  finally { creating.value = false }
+}
+const handleDeleteChat = async chat => {
+  if (!chat?.id || !window.confirm(`确定删除对话“${chat.title || '未命名对话'}”吗？`)) return
+  const version = contextVersion, type = chat.type || currentChatType.value
+  try {
+    await deleteSession(chat.id, type)
+    if (version !== contextVersion) return
+    if (currentChatId.value === chat.id && currentChatType.value === type) currentChatId.value = ''
     const sessions = await loadHistory()
-    if (!currentChatId.value && sessions?.length) currentChatId.value = sessions[0].id
-  } catch (error) {
-    console.error('Failed to delete chat:', error)
-  }
+    if (version === contextVersion && !currentChatId.value && sessions.length) handleSelectChat(sessions[0])
+  } catch (error) { if (version === contextVersion) notice.value = apiError(error) }
+}
+const handleClearChat = () => {
+  if (!currentChatId.value) return
+  return handleDeleteChat(historyList.value.find(item => item.id === currentChatId.value && item.type === currentChatType.value)
+    || { id: currentChatId.value, type: currentChatType.value, title: '当前对话' })
 }
 
-const handleClearChat = async () => {
-  if (!currentChatId.value) return
-  const chat = historyList.value.find(item => item.id === currentChatId.value) || { id: currentChatId.value, title: '当前对话' }
-  await handleDeleteChat(chat)
-}
 </script>
 
 <style>
+.account-bar { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; gap: 14px; padding: 7px 18px; background: #fff; border-bottom: 1px solid #e0eaea; color: #577075; font-size: 12px; }
+.account-bar button { border: 1px solid #cedddd; border-radius: 7px; padding: 5px 10px; background: #f5f9f9; color: #087985; }
+.session-notice { padding: 10px 18px; background: #fff2dc; color: #875b08; }
 .app-frame {
   width: 100%;
   height: 100vh;

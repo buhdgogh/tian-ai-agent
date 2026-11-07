@@ -7,5 +7,11 @@ public record ToolAuditRecord(
         long durationMs,
         String argumentDigest,
         String error,
-        String createdAt
+        String createdAt,
+        String taskId,
+        String ownerId,
+        String chatId,
+        String stepId,
+        Integer iteration,
+        String toolCallId
 ) {}
