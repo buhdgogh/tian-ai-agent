@@ -1,65 +1,168 @@
 <template>
-  <div class="agent-page">
-    <div class="agent-head">
-      <div><b>深度循证分析</b><span>确定性急症检查 · 动态规划 · 多源检索 · 质量复核</span></div>
-      <i v-if="status === 'connecting'">正在执行动态医疗信息任务</i>
-    </div>
-    <ChatRoom :messages="messages" :connection-status="status" ai-type="agent" theme-color="#315ea8" theme-color-rgb="49,94,168"
-      :emergency-text="emergency" title="深度循证分析" subtitle="面向复杂医疗信息任务，动态检索并核对多来源证据" welcome-icon="🔬"
-      :suggestions="['梳理这些症状的危险信号并给出就医准备清单','检索证据并比较两种常见处理方案','对这份健康建议执行临床安全复核']"
-      @send-message="send" @stop-generation="stop"/>
-  </div>
+  <ChatRoom :messages="messages" :connection-status="status" :medical="medical" :emergency-text="emergency"
+    ai-type="agent" title="Agent 问答" subtitle="输入问题，Agent 会自动识别意图并选择执行路径。" welcome-icon="⌘"
+    @send-message="send" @stop-generation="stop">
+    <template #composer-actions>
+      <select id="agent-model" class="ui-field composer-model" aria-label="选择模型"
+        :value="modelProviderId || ''" :disabled="!modelProviders.length"
+        @change="emit('update:modelProviderId', $event.target.value)">
+        <option value="">模型 · 自动选择</option>
+        <option v-for="provider in modelProviders" :key="provider.id" :value="provider.id">{{ provider.model }} · {{ provider.id }}</option>
+      </select>
+    </template>
+  </ChatRoom>
 </template>
+
 <script setup>
-import {onBeforeUnmount,ref,watch} from 'vue'
+import { onBeforeUnmount, ref, watch } from 'vue'
 import ChatRoom from '../components/ChatRoom.vue'
-import {getSessionMessages,streamMedicalAgent} from '../api'
-import {apiError,emergencyMessage,newChatId,normalizeHistory,parseAgentEvent} from '../utils/medical'
-const props=defineProps({chatIdProp:String}),emit=defineEmits(['update-history','update-chat-id'])
-const messages=ref([]),status=ref('disconnected'),emergency=ref('')
-const locallyCreatedChatId=ref('')
-let controller=null
-const ensureId=()=>{if(props.chatIdProp)return props.chatIdProp;const value=newChatId('agent');locallyCreatedChatId.value=value;emit('update-chat-id',value);return value}
-const send=async text=>{
-  if(status.value==='connecting')return
-  emergency.value=''
-  messages.value.push({content:text,isUser:true,time:Date.now()})
-  messages.value.push({content:'',isUser:false,time:Date.now(),trace:[]})
-  const target=messages.value.at(-1)
-  status.value='connecting'
-  controller=new AbortController()
-  const chatId=ensureId()
-  try{
-    await streamMedicalAgent({message:text,chatId},raw=>{
-      const part=parseAgentEvent(raw)
-      if(part.trace.length)target.trace.push(...part.trace.map((event,index)=>({...event,id:`${Date.now()}-${index}`})))
-      if(part.text)target.content+=(target.content?'\n\n':'')+part.text
-      if(part.sources.length)target.sources=part.sources
-      if(part.report)target.report=part.report
-      const hit=emergencyMessage(part.report||target.content)
-      if(hit){emergency.value=hit;status.value='emergency';controller?.abort()}
-    },controller.signal)
-    if(!target.content.trim()&&!target.sources?.length&&!target.report)target.content='### Agent 未返回结果\n\n本次执行没有产生有效内容，请稍后重试。'
+import { streamAgentDispatch, getSessionMessages, getTask } from '../api'
+import { apiError, emergencyMessage, newChatId, normalizeHistory, toolLabel } from '../utils/medical'
+
+const props = defineProps({
+  chatIdProp: String,
+  spaceId: String,
+  medical: Boolean,
+  modelProviderId: String,
+  modelProviders: { type: Array, default: () => [] }
+})
+const emit = defineEmits(['update-history', 'update-chat-id', 'chat-activity', 'update:modelProviderId'])
+const messages = ref([])
+const status = ref('disconnected')
+const emergency = ref('')
+let controller
+let version = 0
+let localChatId
+const pollTimers = new Set()
+
+function stop() {
+  controller?.abort()
+  status.value = 'disconnected'
+}
+
+function reset() {
+  version++
+  stop()
+  pollTimers.forEach(clearTimeout)
+  pollTimers.clear()
+}
+
+function showTask(target, task) {
+  if (!messages.value.includes(target)) return
+  target.task = task
+  if (task.status === 'COMPLETED') {
+    target.content = task.result?.executionResult || '工作流已完成。'
+    return
+  }
+  if (task.status === 'FAILED' || task.status === 'CANCELLED') {
+    target.content = task.status === 'FAILED' ? '工作流执行失败。详情见运行日志。' : '工作流已取消。'
+    return
+  }
+  const timer = setTimeout(async () => {
+    pollTimers.delete(timer)
+    if (!messages.value.includes(target)) return
+    try {
+      const { data } = await getTask(task.id)
+      showTask(target, data)
+    } catch (error) {
+      if (messages.value.includes(target)) target.content = '暂时无法刷新任务，' + apiError(error)
+    }
+  }, 1800)
+  pollTimers.add(timer)
+}
+
+async function send(text) {
+  if (status.value === 'connecting') return
+  const scope = ++version
+  const chatId = props.chatIdProp || newChatId('agent')
+  if (!props.chatIdProp) {
+    localChatId = chatId
+    emit('update-chat-id', chatId)
+  }
+  emit('chat-activity', chatId)
+  emergency.value = ''
+  messages.value.push({ content: text, isUser: true, time: Date.now() },
+    { content: '', isUser: false, time: Date.now(), trace: [] })
+  const target = messages.value.at(-1)
+  controller = new AbortController()
+  status.value = 'connecting'
+  try {
+    let serverError = false
+    const request = { message: text, chatId, spaceId: props.spaceId, modelProviderId: props.modelProviderId || undefined }
+    const { sawDone } = await streamAgentDispatch(request, (type, data) => {
+      if (scope !== version) return
+      if (type === 'run') {
+        target.runId = data.runId
+      } else if (type === 'route') {
+        const strategy = { KEYWORD: '规则匹配', LLM: '模型分类', KEYWORD_FALLBACK: '规则回退' }[data.strategy]
+        if (strategy) target.trace.push({
+          type: 'thinking', title: '意图识别 · ' + strategy,
+          detail: data.intentTypes?.join('、'), status: 'completed'
+        })
+        if (!data.requiresWorkflow) target.trace.push({ type: 'thinking', title: 'ReAct', status: 'called' })
+      } else if (type === 'delta') {
+        target.content += data.text
+      } else if (type === 'tools') {
+        const tools = data.names.filter(name => name !== 'doTerminate')
+        if (tools.length) target.content = ''
+        tools.forEach(name => target.trace.push({ type: 'tool', title: toolLabel(name), tool: name, status: 'called' }))
+      } else if (type === 'task' && data.id) {
+        target.trace.push({ type: 'thinking', title: 'Plan–Execute–Replan', detail: '已提交工作流', status: 'called' })
+        target.content = '工作流已提交，正在等待结果。'
+        showTask(target, data)
+      } else if (type === 'error') {
+        serverError = true
+        target.runId = data.runId || target.runId
+        if (target.content) target.incomplete = true
+        else target.content = data.message
+      }
+    }, controller.signal)
+    if (scope !== version) return
+    if (!sawDone && !serverError) throw new Error('流式连接中断，请查看运行日志。')
+    if (!target.content.trim()) target.content = 'Agent 本轮未返回最终回答。'
+    if (props.medical) emergency.value = emergencyMessage(target.content)
     emit('update-history')
-  }catch(error){
-    if(error?.name==='AbortError')target.incomplete=true
-    else if(target.content){target.incomplete=true;target.content+=`\n\n---\n\n**流式连接中断：** ${apiError(error)}`}
-    else target.content=`### Agent 执行未完成\n\n${apiError(error)}`
-  }finally{
-    controller=null
-    if(status.value!=='emergency')status.value='disconnected'
+  } catch (error) {
+    if (scope !== version) return
+    if (target.content) target.incomplete = true
+    else target.content = apiError(error)
+  } finally {
+    if (scope === version) status.value = 'disconnected'
   }
 }
-const stop=()=>{controller?.abort();status.value='disconnected'}
-watch(()=>props.chatIdProp,async value=>{
-  // 忽略本轮发送刚创建并回传的 ID，避免 watcher 中止自己的请求并清空消息。
-  if(value&&value===locallyCreatedChatId.value){locallyCreatedChatId.value='';return}
-  controller?.abort();messages.value=[];emergency.value=''
-  if(!value)return
-  try{const {data}=await getSessionMessages(value,'agent');messages.value=normalizeHistory(data)}catch(error){messages.value=[{content:apiError(error),isUser:false,time:Date.now()}]}
-},{immediate:true})
-onBeforeUnmount(()=>controller?.abort())
+
+watch([() => props.chatIdProp, () => props.spaceId], async ([id, spaceId]) => {
+  if (id && id === localChatId) {
+    localChatId = null
+    return
+  }
+  reset()
+  const scope = version
+  messages.value = []
+  emergency.value = ''
+  if (!id) return
+  try {
+    const { data } = await getSessionMessages(id, 'agent', spaceId)
+    if (scope === version) messages.value = normalizeHistory(data)
+  } catch (error) {
+    if (scope === version) messages.value = [{ content: apiError(error), time: Date.now() }]
+  }
+}, { immediate: true })
+
+onBeforeUnmount(() => {
+  reset()
+  messages.value = []
+})
 </script>
+
 <style scoped>
-.agent-page{height:100%;display:flex;flex-direction:column}.agent-head{min-height:66px;padding:10px 24px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between}.agent-head b{display:block;color:#234b80}.agent-head span{font-size:11px;color:#7a8da5}.agent-head>i{padding:6px 10px;border-radius:99px;background:#e5edff;color:#315ea8;font:normal 11px inherit}@media(max-width:700px){.agent-head>i{display:none}}
+.composer-model {
+  max-width: min(220px, 58vw);
+  height: 32px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
 </style>

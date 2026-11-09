@@ -1,0 +1,155 @@
+# Tian 知识工作台开发环境配置
+server:
+  port: 8123
+  servlet:
+    context-path: /api
+  tomcat:
+    uri-encoding: UTF-8
+    accept-count: 1000
+    threads:
+      max: 800
+      min-spare: 100
+
+knowledge-base:
+  wiki:
+    max-parallel-segments: 3
+  delete:
+    max-attempts: 3
+    initial-backoff-ms: 300
+  upload:
+    max-per-window: 100
+    window-seconds: 60
+  mcp:
+    parse-batch-window-ms: 1000
+    parse-batch-max-size: 20
+    # 限制批任务并发，避免远端解析 API 过载。
+    parse-batch-concurrency: 1
+    parse-poll-interval-ms: 2000
+    parse-poll-max-consecutive-failures: 5
+    parse-poll-retry-backoff-ms: 1000
+    parse-timeout-seconds: 1800
+  storage:
+    # 本地模式从数据目录读取文档。使用对象存储时将 mode 改为 oss 并配置凭据。
+    mode: local
+  oss:
+    endpoint: oss-cn-wuhan-lr.aliyuncs.com
+    # 仅供文档服务及时下载，缩短泄露窗口；不要记录完整URL。
+    url-expiration-seconds: 3600
+
+spring:
+  config:
+    import:
+      - classpath:document-mcp.yml
+      - "optional:file:../.env[.properties]"
+      - "optional:file:./.env[.properties]"
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      database: 0
+      timeout: 3000ms
+      lettuce:
+        pool:
+          max-active: 8
+          max-idle: 4
+          min-idle: 1
+  application:
+    name: tian-knowledge-workspace
+  servlet:
+    multipart:
+      max-file-size: 200MB
+      max-request-size: 200MB
+  ai:
+    dashscope:
+      chat:
+        options:
+          model: qwen-plus
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+  api-docs:
+    path: /v3/api-docs
+  group-configs:
+    - group: 'default'
+      paths-to-match: '/**'
+      packages-to-scan: com.tianaiagent.trigger.http
+
+knife4j:
+  enable: true
+  setting:
+    language: zh_cn
+
+
+logging:
+  charset:
+    console: UTF-8
+  level:
+    # 医疗场景禁止 DEBUG 输出完整提示词和健康信息。
+    org.springframework.ai: INFO
+
+agent:
+  models:
+    timeout: 60s
+    cooldown: 30s
+    # 用户可配置这些来源下的 API 地址。自建网关填入完整的 scheme://host[:port]。
+    allowed-user-origins:
+      - https://api.deepseek.com
+      - https://api.openai.com
+      - https://api.anthropic.com
+      - https://dashscope.aliyuncs.com
+      - https://llm-3x40yesn3p4vcgc7.cn-beijing.maas.aliyuncs.com
+      - https://dashscope-intl.aliyuncs.com
+      - https://dashscope-us.aliyuncs.com
+      - https://cn-hongkong.dashscope.aliyuncs.com
+  persistence:
+    mysql:
+      enabled: true
+      import-legacy-history: true
+      jdbc-url: jdbc:mysql://127.0.0.1:3306/tian_ai_agent?serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+      username: root
+  mcp:
+    # 只填写信任的 MCP 服务来源，例如 https://tools.example.com，不含端点路径。
+    allowed-origins: []
+  memory:
+    backend: redis
+    max-messages: 200
+    ttl-days: 30
+    long-term:
+      enabled: false
+      compact-threshold: 2
+      compact-every-messages: 6
+      semantic-top-k: 3
+      semantic-min-score: 0.4
+  task-center:
+    core-pool-size: 4
+    max-pool-size: 12
+    queue-capacity: 200
+  tool-gateway:
+    max-argument-chars: 20000
+    timeout-seconds: 30
+    max-concurrency: 8
+    audit-capacity: 500
+    # 只有无副作用且同一轮内互不依赖的工具允许并行执行。
+    parallel-safe-tools:
+      - queryApprovedMedicalKnowledge
+      - getKnowledgeChunkContext
+      - searchPubMed
+      - getPubMedArticle
+      - verifyPubMedCitation
+      - searchClinicalTrials
+      - searchWeb
+      - scrapeWebPage
+  workflow:
+    max-parallel-steps: 4
+  rag:
+    semantic-cache:
+      enabled: true
+      similarity-threshold: 0.985
+      lexical-threshold: 0.82
+      max-entries: 500
+      ttl-hours: 12
+  access:
+    admin-token: sadgaikfgaiugfiugfiuasgiua

@@ -1,7 +1,7 @@
 <template>
   <div class="ai-avatar-fallback" :class="type">
     <span v-if="type === 'medical'">⚕</span>
-    <span v-else>🔬</span>
+    <span v-else>{{ type === 'agent' ? '⌘' : '◇' }}</span>
   </div>
 </template>
 

@@ -3,6 +3,20 @@ import axios from 'axios'
 export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
 
 const request = axios.create({ baseURL: API_BASE_URL, timeout: 120000 })
+const TOKEN_KEY = 'tian-api-token'
+export const getApiToken = () => sessionStorage.getItem(TOKEN_KEY) || ''
+export const setApiToken = token => {
+  if (token.trim()) sessionStorage.setItem(TOKEN_KEY, token.trim())
+  else sessionStorage.removeItem(TOKEN_KEY)
+}
+const authorization = () => {
+  const token = getApiToken()
+  return token ? { Authorization: `Bearer ${token}` } : {}
+}
+request.interceptors.request.use(config => {
+  Object.assign(config.headers, authorization())
+  return config
+})
 
 const parseErrorBody = async response => {
   let message
@@ -22,7 +36,7 @@ const parseErrorBody = async response => {
 export const streamMedicalChat = async (path, body, onChunk, signal) => {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authorization() },
     body: JSON.stringify(body),
     signal
   })
@@ -33,12 +47,18 @@ export const streamMedicalChat = async (path, body, onChunk, signal) => {
   let buffer = ''
   let sawDone = false
   const consume = event => {
-    const data = event.split(/\r?\n/)
+    const lines = event.split(/\r?\n/)
+    const type = lines.find(line => line.startsWith('event:'))?.slice(6).trim()
+    const data = lines
       .filter(line => line.startsWith('data:'))
-      .map(line => line.slice(5).trimStart())
+      // Spring 紧接 data: 写入正文。开头的空格可能属于模型分片。
+      .map(line => line.slice(5))
       .join('\n')
     if (data === '[DONE]') sawDone = true
-    else if (data) onChunk?.(data)
+    else if (data) {
+      if (type === 'done') sawDone = true
+      onChunk?.(data, type)
+    }
   }
 
   while (true) {
@@ -54,15 +74,19 @@ export const streamMedicalChat = async (path, body, onChunk, signal) => {
   return { sawDone, completed: true }
 }
 
-export const streamMedicalAssistant = (body, onChunk, signal) => streamMedicalChat('/ai/medical/chat/stream', body, onChunk, signal)
-export const streamMedicalAgent = (body, onChunk, signal) => streamMedicalChat('/ai/medical-agent/chat', body, onChunk, signal)
-export const chatMedical = body => request.post('/ai/medical/chat', body)
-export const chatMedicalRag = body => request.post('/ai/medical/rag-chat', body)
-export const createMedicalEvidenceReport = body => request.post('/ai/medical/evidence-report', body)
+export const streamKnowledgeChat = (body, onChunk, signal) => streamMedicalChat('/ai/chat/stream', body, onChunk, signal)
+export const streamKnowledgeAgent = (body, onChunk, signal) => streamMedicalChat('/ai/agent/stream', body, onChunk, signal)
+export const dispatchAgent = (body, signal) => request.post('/ai/dispatch', body, { signal })
+export const streamAgentDispatch = (body, onEvent, signal) => streamMedicalChat(
+  '/ai/dispatch/stream', body, (data, type) => onEvent(type, JSON.parse(data)), signal
+)
+export const chatWithTools = (body, signal) => request.post('/ai/chat/tools', body, { signal })
+export const chatWithKnowledge = (body, signal) => request.post('/ai/chat/rag', body, { signal })
+export const createMedicalEvidenceReport = (body, signal) => request.post('/ai/medical/evidence-report', body, { signal })
 
-export const getSessions = type => request.get('/ai/sessions', { params: { type } })
-export const getSessionMessages = (chatId, type) => request.get(`/ai/sessions/${chatId}/messages`, { params: { type } })
-export const deleteSession = (chatId, type) => request.delete(`/ai/sessions/${chatId}`, { params: { type } })
+export const getSessions = (type, spaceId) => request.get('/ai/sessions', { params: { type, spaceId, workspace: true } })
+export const getSessionMessages = (chatId, type, spaceId) => request.get(`/ai/sessions/${chatId}/messages`, { params: { type, spaceId, workspace: true } })
+export const deleteSession = (chatId, type, spaceId) => request.delete(`/ai/sessions/${chatId}`, { params: { type, spaceId, workspace: true } })
 
 export const uploadKnowledgeFile = (file, metadata, onProgress) => {
   const formData = new FormData()
@@ -74,15 +98,32 @@ export const uploadKnowledgeFile = (file, metadata, onProgress) => {
     validateStatus: status => status >= 200 && status < 300
   })
 }
-export const getKnowledgeFiles = () => request.get('/knowledge-base/files')
-export const deleteKnowledgeFile = id => request.delete(`/knowledge-base/files/${id}`)
-export const queryKnowledgeBase = (question, topK = 8) => request.post('/knowledge-base/query-with-sources', { question, topK })
-export const retrieveKnowledgeBase = (question, topK = 8) => request.post('/knowledge-base/retrieve', { question, topK })
+export const getWikiGraph = spaceId => request.get('/knowledge-base/wiki-graph', { params: { spaceId } })
+export const compileWiki = spaceId => request.post('/knowledge-base/wiki-compile', null, { params: { spaceId } })
+export const getWikiPage = (spaceId, pageId) => request.get('/knowledge-base/wiki-pages/' + encodeURIComponent(pageId), { params: { spaceId } })
+export const getKnowledgeSpaces = () => request.get('/knowledge-base/spaces')
+export const createKnowledgeSpace = (name, medical) => request.post('/knowledge-base/spaces', { name, medical })
+export const deleteKnowledgeSpace = (id, accountName) => request.delete('/knowledge-base/spaces/' + encodeURIComponent(id), { data: { accountName } })
+export const getKnowledgeFiles = spaceId => request.get('/knowledge-base/files', { params: { spaceId } })
+export const deleteKnowledgeFile = (id, spaceId) => request.delete(`/knowledge-base/files/${id}`, { params: { spaceId } })
+export const queryKnowledgeBase = (spaceId, question, topK = 8) => request.post('/knowledge-base/query-with-sources', { spaceId, question, topK })
+export const retrieveKnowledgeBase = (spaceId, question, topK = 8) => request.post('/knowledge-base/retrieve', { spaceId, question, topK })
 
+export const createRagEvaluation = payload => request.post('/rag-evaluations', payload)
 export const getTask = taskId => request.get(`/tasks/${taskId}`)
 export const getTasks = (params = {}) => request.get('/tasks', { params })
 export const cancelTask = taskId => request.delete(`/tasks/${taskId}`)
-export const createMedicalWorkflow = payload => request.post('/ai/workflows', payload)
+export const createWorkflow = payload => request.post('/ai/workflows', payload)
 export const getHealth = () => request.get('/health')
+export const getAgentRuns = () => request.get('/agent-runs')
+export const getAgentRun = id => request.get(`/agent-runs/${id}`)
+
+export const getMcpServers = () => request.get('/mcp-servers')
+export const discoverMcpTools = (id, body) => request.post('/mcp-servers/' + encodeURIComponent(id) + '/discover', body)
+export const saveMcpServer = (id, body) => request.put('/mcp-servers/' + encodeURIComponent(id), body)
+export const deleteMcpServer = id => request.delete('/mcp-servers/' + encodeURIComponent(id))
+
+export const getModelProviders = () => request.get('/model-providers')
+export const saveModelProviders = settings => request.put('/model-providers', settings)
 
 export default request

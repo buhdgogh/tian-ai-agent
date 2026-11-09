@@ -1,0 +1,60 @@
+package com.tianaiagent.infrastructure.adapter.port.knowledge;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tianaiagent.domain.medical.service.MedicalSafetyService;
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.embedding.EmbeddingModel;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.ZSetOperations;
+
+import java.util.Set;
+
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.startsWith;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
+
+class SemanticRagCacheTest {
+    @Test
+    void rejectsSemanticallySimilarQuestionWhenCriticalPopulationDiffers() throws Exception {
+        StringRedisTemplate redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        ZSetOperations<String, String> zsets = mock(ZSetOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(redis.opsForZSet()).thenReturn(zsets);
+        when(values.get(anyString())).thenReturn(null);
+        EmbeddingModel embedding = mock(EmbeddingModel.class);
+        when(embedding.embed(anyString())).thenReturn(new float[]{1, 0});
+        ObjectMapper mapper = new ObjectMapper();
+        SemanticRagCache.CacheEntry entry = new SemanticRagCache.CacheEntry(
+                "孕妇高血压有哪些风险", "PREVENTION", "孕妇", 8, "v1",
+                new float[]{1, 0}, "{\"answer\":\"cached\"}");
+        when(zsets.reverseRange("rag:cache:semantic:medical", 0, 99))
+                .thenReturn(Set.of(mapper.writeValueAsString(entry)));
+        SemanticRagCache cache = new SemanticRagCache(redis, mapper, java.util.Optional.of(embedding),
+                new MedicalSafetyService(), true, 0.98, 0.1, 100, 12);
+
+        assertTrue(cache.get("medical", "哺乳期高血压有哪些风险", 8, "v1").isEmpty());
+    }
+
+    @Test
+    void separatesExactAndSemanticLookupsBySpace() {
+        var redis = mock(StringRedisTemplate.class);
+        ValueOperations<String, String> values = mock(ValueOperations.class);
+        ZSetOperations<String, String> zsets = mock(ZSetOperations.class);
+        when(redis.opsForValue()).thenReturn(values);
+        when(redis.opsForZSet()).thenReturn(zsets);
+        String first = "a".repeat(32);
+        String second = "b".repeat(32);
+        when(values.get(startsWith("rag:cache:exact:" + first + ":"))).thenReturn("{\"answer\":\"第一空间\"}");
+        var cache = new SemanticRagCache(redis, new ObjectMapper(), java.util.Optional.of(mock(EmbeddingModel.class)),
+                new MedicalSafetyService(), true, 0.98, 0.1, 100, 12);
+
+        assertTrue(cache.get(first, "压缩机检修", 8, "v1").isPresent());
+        assertTrue(cache.get(second, "压缩机检修", 8, "v1").isEmpty());
+        verify(zsets).reverseRange("rag:cache:semantic:" + second, 0, 99);
+    }
+}

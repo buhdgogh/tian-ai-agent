@@ -1,0 +1,14 @@
+spring:
+  data:
+    redis:
+      host: 127.0.0.1
+      port: 6379
+
+agent:
+  memory:
+    long-term:
+      enabled: true
+
+doc-mcp:
+  milvus:
+    uri: http://127.0.0.1:19530

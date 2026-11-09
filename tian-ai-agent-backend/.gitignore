@@ -8,6 +8,8 @@ volumes/
 
 target/
 data/
+parsed/
+runtime/
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

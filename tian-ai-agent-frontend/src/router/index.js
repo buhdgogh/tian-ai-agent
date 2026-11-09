@@ -1,11 +1,15 @@
 import { createRouter, createWebHistory } from 'vue-router'
 
 const routes = [
-  { path: '/', name: 'Home', component: () => import('../views/Home.vue'), meta: { title: '天医 - 循证医疗信息与安全支持智能体' } },
-  { path: '/medical', name: 'Medical', component: () => import('../views/Medical.vue'), meta: { title: '医疗信息助手 - 天医' } },
-  { path: '/medical-agent', name: 'MedicalAgent', component: () => import('../views/MedicalAgent.vue'), meta: { title: '深度循证分析 - 天医' } },
-  { path: '/knowledge-base', name: 'KnowledgeBase', component: () => import('../views/KnowledgeBase.vue'), meta: { title: '医疗知识库 - 天医' } },
-  { path: '/tasks', name: 'Tasks', component: () => import('../views/MedicalTasks.vue'), meta: { title: '任务与人工审核 - 天医' } },
+  { path: '/', redirect: '/agent' },
+  { path: '/chat', alias: '/medical', redirect: '/agent' },
+  { path: '/agent', alias: '/medical-agent', name: 'Agent', component: () => import('../views/MedicalAgent.vue'), meta: { title: 'Agent 问答 - Tian 知识工作台' } },
+  { path: '/knowledge-base', name: 'KnowledgeBase', component: () => import('../views/KnowledgeBase.vue'), meta: { title: '知识库导入 - Tian 知识工作台' } },
+  { path: '/wiki', name: 'Wiki', component: () => import('../views/WikiGraph.vue'), meta: { title: 'Wiki 知识图谱 - Tian 知识工作台' } },
+  { path: '/tasks', redirect: to => ({ path: '/agent-runs', query: { taskId: to.query.taskId } }) },
+  { path: '/agent-runs', name: 'AgentRuns', component: () => import('../views/AgentRuns.vue'), meta: { title: 'Agent 运行日志 - Tian 知识工作台' } },
+  { path: '/mcp-settings', name: 'McpSettings', component: () => import('../views/McpSettings.vue'), meta: { title: 'MCP 设置 - Tian 知识工作台' } },
+  { path: '/model-settings', name: 'ModelSettings', component: () => import('../views/ModelSettings.vue'), meta: { title: '模型设置 - Tian 知识工作台' } },
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ]
 

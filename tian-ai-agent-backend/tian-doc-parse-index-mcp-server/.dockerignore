@@ -1,8 +1,0 @@
-.git
-.idea
-*.iml
-*.log
-target
-data
-parsed
-runtime

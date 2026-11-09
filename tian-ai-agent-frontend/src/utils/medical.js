@@ -4,12 +4,18 @@ export const apiError = error => {
   if (error?.name === 'AbortError' || error?.code === 'ERR_CANCELED') return '请求已停止。'
   const status = error?.response?.status || error?.status
   const message = error?.response?.data?.error?.message || error?.response?.data?.message || error?.message
+  if (status === 401) return '请在页面上方设置有效的访问令牌。'
+  if (status === 403) return '当前访问令牌无权执行此操作。'
   if (status === 400) return `请求信息不完整或格式有误：${message || '请检查输入后重试。'}`
   if (status === 429) {
     const retry = error?.response?.headers?.['retry-after'] || error?.retryAfter
     return `请求过于频繁，请${retry ? `在 ${retry} 秒后` : '稍后'}重试。`
   }
-  if (status >= 500) return '医疗服务暂时不可用，请稍后重试；如情况紧急，请直接拨打 120。'
+  const code = error?.response?.data?.code
+  if (status === 503 && ['MODEL_NOT_CONFIGURED', 'MODEL_UNAVAILABLE', 'MODEL_CALL_FAILED'].includes(code) && message) {
+    return message
+  }
+  if (status >= 500) return '服务暂时不可用，请稍后重试。'
   return message || '网络连接异常，请检查服务状态后重试。'
 }
 
@@ -20,17 +26,18 @@ export const retryAfterSeconds = error => {
 }
 
 export const normalizeSources = value => Array.isArray(value) ? value.map((source, index) => ({
+  ...source.metadata,
   ...source,
-  citation: source.citation || index + 1,
+  citation: source.citation || source.index || index + 1,
   title: source.title || source.documentTitle || source.fileName,
   fileName: source.fileName || source.documentName,
   quote: source.quote || source.snippet || source.text,
   page: source.page || source.pageNumber,
-  publishedAt: source.publishedAt || source.publishDate
+  publishedAt: source.publishedAt || source.publishDate || source.metadata?.publishedAt
 })) : []
 
 const TOOL_LABELS = {
-  queryApprovedMedicalKnowledge: '检索已审核医疗知识库',
+  queryApprovedMedicalKnowledge: '检索当前知识库空间',
   getKnowledgeChunkContext: '读取知识片段上下文',
   searchPubMed: '检索 PubMed 文献',
   getPubMedArticle: '读取 PubMed 文献详情',
@@ -69,7 +76,7 @@ export const parseAgentEvent = chunk => {
 
   if (realTools.length) {
     trace.push({ type: 'thinking', title: '分析问题并选择下一步', detail: `决定调用 ${realTools.map(toolLabel).join('、')}`, status: 'completed' })
-    realTools.forEach(name => trace.push({ type: 'tool', title: toolLabel(name), tool: name, detail: '调用已完成', status: 'completed' }))
+    realTools.forEach(name => trace.push({ type: 'tool', title: toolLabel(name), tool: name, status: 'called' }))
   }
   if (tools.includes('doTerminate')) trace.push({ type: 'complete', title: '完成信息整理与回答', status: 'completed' })
 
