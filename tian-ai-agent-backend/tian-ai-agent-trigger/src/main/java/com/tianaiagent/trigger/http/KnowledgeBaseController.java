@@ -73,7 +73,7 @@ public class KnowledgeBaseController {
     public KnowledgeSpace createSpace(@RequestBody CreateKnowledgeSpaceRequest request,
                                       @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         identity.requireAdmin();
-        return knowledgeBaseService.createSpace(request.name(), request.medical());
+        return knowledgeBaseService.createSpace(request.name(), request.medical(), identity.ownerId(), request.embeddingProviderId());
     }
 
     @DeleteMapping("/spaces/{spaceId}")

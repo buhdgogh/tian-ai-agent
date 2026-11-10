@@ -12,6 +12,7 @@ import java.time.OffsetDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Supplier;
 
 /**
  * 描述：网页搜索工具
@@ -21,7 +22,7 @@ public class WebSearchTool {
     private static final String SEARCH_API_URL = "https://www.searchapi.io/api/v1/search";
 
     /** API密钥 **/
-    private final String apiKey;
+    private final Supplier<String> credentials;
     private final String endpoint;
 
     /** 构造方法 **/
@@ -29,20 +30,33 @@ public class WebSearchTool {
         this(apiKey, SEARCH_API_URL);
     }
 
+    public WebSearchTool(Supplier<String> credentials) {
+        this(credentials, SEARCH_API_URL);
+    }
+
     WebSearchTool(String apiKey, String endpoint) {
-        String key = apiKey == null ? "" : apiKey.strip();
+        this(() -> apiKey, endpoint);
+    }
+
+    WebSearchTool(Supplier<String> credentials, String endpoint) {
+        this.credentials = credentials;
+        this.endpoint = endpoint;
+    }
+
+    private static String normalizedKey(String value) {
+        String key = value == null ? "" : value.strip();
         if (key.length() > 1 && (key.startsWith("\"") && key.endsWith("\"")
                 || key.startsWith("'") && key.endsWith("'"))) {
             key = key.substring(1, key.length() - 1).strip();
         }
-        this.apiKey = key;
-        this.endpoint = endpoint;
+        return key;
     }
 
     @Tool(description = "检索公开网页。优先选择权威原始来源，并核对日期与版本。")
     public String searchWeb(@ToolParam(description = "包含主题及所需地区、日期或版本等约束的检索词") String query) {
         if (query == null || query.isBlank()) return error("SEARCH_QUERY_EMPTY", "搜索词不能为空");
-        if (apiKey.isBlank()) return error("SEARCH_API_KEY_MISSING", "SEARCH_API_KEY 未配置");
+        String apiKey = normalizedKey(credentials.get());
+        if (apiKey.isBlank()) return error("SEARCH_API_KEY_MISSING", "请在配置中心填写 SearchAPI Key");
         try (HttpResponse response = HttpRequest.get(endpoint).header("Authorization", "Bearer " + apiKey)
                 .form("engine", "baidu").form("q", query.trim()).timeout(10_000).execute()) {
             int status = response.getStatus();

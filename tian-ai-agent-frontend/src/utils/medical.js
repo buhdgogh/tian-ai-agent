@@ -37,6 +37,8 @@ export const normalizeSources = value => Array.isArray(value) ? value.map((sourc
 })) : []
 
 const TOOL_LABELS = {
+  listWorkspaceFiles: '列出工作区文件',
+  readWorkspaceFile: '读取工作区文件',
   queryApprovedMedicalKnowledge: '检索当前知识库空间',
   getKnowledgeChunkContext: '读取知识片段上下文',
   searchPubMed: '检索 PubMed 文献',

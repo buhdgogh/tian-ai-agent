@@ -1,6 +1,7 @@
 package com.tianaiagent.trigger.http;
 
 import com.tianaiagent.domain.agent.service.AgentRunAudit;
+import com.tianaiagent.domain.agent.service.LocalWorkspaceReads;
 import com.tianaiagent.domain.agent.service.MedicalDispatchService;
 import com.tianaiagent.domain.medical.service.MedicalIntentRouter;
 import com.tianaiagent.domain.task.model.aggregate.TaskRecord;
@@ -19,11 +20,13 @@ import java.util.concurrent.atomic.AtomicBoolean;
 final class SseDispatchOutput implements MedicalDispatchService.Output {
     private final SseEmitter emitter = new SseEmitter(180_000L);
     private final AgentRunAudit.Run run;
+    private final Runnable closeWorkspace;
     private final AtomicBoolean closed = new AtomicBoolean();
     private volatile Future<?> worker;
 
-    SseDispatchOutput(AgentRunAudit.Run run) {
+    SseDispatchOutput(AgentRunAudit.Run run, Runnable closeWorkspace) {
         this.run = run;
+        this.closeWorkspace = closeWorkspace;
         emitter.onTimeout(() -> cancel("TIMEOUT"));
         emitter.onError(error -> cancel("CANCELLED"));
         emitter.onCompletion(() -> cancel("CANCELLED"));
@@ -41,6 +44,7 @@ final class SseDispatchOutput implements MedicalDispatchService.Output {
     @Override public void workflow(TaskRecord task) { send("task", task); }
     @Override public void delta(String text) { send("delta", Map.of("text", text)); }
     @Override public void tools(List<String> names) { send("tools", Map.of("names", names)); }
+    void workspaceRequest(LocalWorkspaceReads.Request request) { send("workspace_request", request); }
 
     private void send(String type, Object payload) {
         if (closed.get()) throw new CancellationException();
@@ -77,6 +81,7 @@ final class SseDispatchOutput implements MedicalDispatchService.Output {
 
     private void finish(String status) {
         if (closed.compareAndSet(false, true)) {
+            closeWorkspace.run();
             run.finish(status);
             emitter.complete();
         }
@@ -84,6 +89,7 @@ final class SseDispatchOutput implements MedicalDispatchService.Output {
 
     private void cancel(String status) {
         if (closed.compareAndSet(false, true)) {
+            closeWorkspace.run();
             Future<?> running = worker;
             if (running != null) running.cancel(true);
             run.finish(status);

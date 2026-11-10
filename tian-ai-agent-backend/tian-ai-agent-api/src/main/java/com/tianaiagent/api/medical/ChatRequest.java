@@ -1,8 +1,19 @@
 package com.tianaiagent.api.medical;
 
-public record ChatRequest(String message, String chatId, String spaceId, String modelProviderId) {
+import java.util.List;
+
+public record ChatRequest(String message, String chatId, String spaceId, String modelProviderId, List<String> skillIds,
+                          boolean localWorkspace) {
     public ChatRequest(String message, String chatId, String spaceId) {
         this(message, chatId, spaceId, null);
+    }
+
+    public ChatRequest(String message, String chatId, String spaceId, String modelProviderId) {
+        this(message, chatId, spaceId, modelProviderId, null);
+    }
+
+    public ChatRequest(String message, String chatId, String spaceId, String modelProviderId, List<String> skillIds) {
+        this(message, chatId, spaceId, modelProviderId, skillIds, false);
     }
 
     public void validate() {

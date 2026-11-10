@@ -84,8 +84,16 @@ knife4j:
 
 
 logging:
+  file:
+    name: ./logs/tian-ai-agent.log
   charset:
     console: UTF-8
+    file: UTF-8
+  logback:
+    rollingpolicy:
+      max-file-size: 10MB
+      max-history: 14
+      total-size-cap: 200MB
   level:
     # 医疗场景禁止 DEBUG 输出完整提示词和健康信息。
     org.springframework.ai: INFO
@@ -101,6 +109,8 @@ agent:
       - https://api.anthropic.com
       - https://dashscope.aliyuncs.com
       - https://llm-3x40yesn3p4vcgc7.cn-beijing.maas.aliyuncs.com
+      # 仅用于向量嵌入，允许用户配置自己在北京的百炼业务空间。
+      - "https://*.cn-beijing.maas.aliyuncs.com"
       - https://dashscope-intl.aliyuncs.com
       - https://dashscope-us.aliyuncs.com
       - https://cn-hongkong.dashscope.aliyuncs.com
@@ -108,11 +118,12 @@ agent:
     mysql:
       enabled: true
       import-legacy-history: true
-      jdbc-url: jdbc:mysql://127.0.0.1:3306/tian_ai_agent?serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+      jdbc-url: jdbc:mysql://127.0.0.1:${MYSQL_PORT:13306}/${MYSQL_DATABASE:tian_ai_agent}?serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
       username: root
   mcp:
     # 只填写信任的 MCP 服务来源，例如 https://tools.example.com，不含端点路径。
-    allowed-origins: []
+    allowed-origins:
+      - https://mcp.jmrp.io
   memory:
     backend: redis
     max-messages: 200
@@ -152,4 +163,4 @@ agent:
       max-entries: 500
       ttl-hours: 12
   access:
-    admin-token: sadgaikfgaiugfiugfiuasgiua
+    admin-token: admin-sadgaikfgaiugfiugfiuasgiua

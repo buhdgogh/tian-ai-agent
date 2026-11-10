@@ -1,5 +1,7 @@
 package com.tianaiagent.domain.knowledge.service.document;
 
+import com.tianaiagent.domain.agent.model.valobj.PersonalTool;
+import com.tianaiagent.domain.agent.service.ToolCredentialService;
 import com.tianaiagent.domain.knowledge.adapter.port.MultimodalDocumentParser;
 import com.tianaiagent.domain.knowledge.adapter.port.DocumentSource;
 import com.tianaiagent.domain.knowledge.adapter.port.TextDocumentParser;
@@ -40,11 +42,13 @@ public class DocumentParseService {
     private final MultimodalDocumentParser mineru;
     private final IndexService indexService;
     private final ObjectMapper mapper;
+    private final ToolCredentialService credentials;
     private final ExecutorService executor;
 
     public DocumentParseService(DocMcpProperties properties, ParseTaskRepository repository,
                                 DocumentSource sourceLoader, TextDocumentParser tika,
-                                MultimodalDocumentParser mineru, IndexService indexService, ObjectMapper mapper) {
+                                MultimodalDocumentParser mineru, IndexService indexService, ObjectMapper mapper,
+                                ToolCredentialService credentials) {
         this.properties = properties;
         this.repository = repository;
         this.sourceLoader = sourceLoader;
@@ -52,11 +56,16 @@ public class DocumentParseService {
         this.mineru = mineru;
         this.indexService = indexService;
         this.mapper = mapper;
+        this.credentials = credentials;
         this.executor = Executors.newFixedThreadPool(Math.max(1, properties.getParseWorkers()),
                 Thread.ofPlatform().name("document-parse-", 1).daemon(true).factory());
     }
 
     public ParseTask submit(ParseRequest request) {
+        return submit(request, null);
+    }
+
+    public ParseTask submit(ParseRequest request, String ownerId) {
         if (request.fileSources() == null || request.fileSources().isEmpty()) throw new IllegalArgumentException("file_sources不能为空");
         if (request.fileSources().size() > MAX_BATCH_SIZE) throw new IllegalArgumentException("单批最多200个文件");
         if (request.fileSources().stream().distinct().count() != request.fileSources().size()) throw new IllegalArgumentException("同一批次不能包含重复来源");
@@ -68,6 +77,11 @@ public class DocumentParseService {
         options.put("table", request.table());
         options.put("language", defaultValue(request.language(), "ch"));
         validateOptions(options);
+        var parser = mineru.withToken(credentials.resolve(ownerId, PersonalTool.MINERU));
+        if ("mineru".equalsIgnoreCase(String.valueOf(options.get("mode"))) && !parser.isAvailable()) {
+            throw new IllegalStateException("mode=mineru 时需要启用 MinerU 并配置个人 Token");
+        }
+        String profile = parserProfile(options, parser);
 
         ParseTask task = ParseTask.queued(UUID.randomUUID().toString());
         task.setOutputDir(Path.of(properties.getParsedDir()).toAbsolutePath().normalize().toString());
@@ -90,7 +104,7 @@ public class DocumentParseService {
             item.setContentSha256(fingerprint);
             KnowledgeSpace space = indexService.space(request.spaceIds().get(source));
             item.setSpaceId(space.id());
-            item.setCacheKey(cacheKey(space.id(), fingerprint, options));
+            item.setCacheKey(cacheKey(space.id(), fingerprint, options, profile));
             Map<String, Object> metadata = request.documentMetadatas() == null
                     ? null : request.documentMetadatas().get(source);
             if (request.autoIndex() && space.medical()) MedicalDocumentMetadata.approvedFrom(metadata);
@@ -99,7 +113,7 @@ public class DocumentParseService {
         }
         task.setItems(items);
         repository.saveTask(task);
-        executor.execute(() -> run(task));
+        executor.execute(() -> run(task, parser, profile));
         return task;
     }
 
@@ -107,7 +121,7 @@ public class DocumentParseService {
         return repository.findTask(taskId).orElseThrow(() -> new TaskNotFoundException(taskId));
     }
 
-    private void run(ParseTask task) {
+    private void run(ParseTask task, MultimodalDocumentParser parser, String profile) {
         long started = System.nanoTime();
         task.setStatus("running");
         repository.saveTask(task);
@@ -117,7 +131,7 @@ public class DocumentParseService {
             long itemStarted = System.nanoTime();
             try {
                 item.setStatus("running");
-                item.setParser(parserName(task.getOptions()));
+                item.setParser(profile.startsWith("tika") ? "tika" : "mineru-v4");
                 repository.saveTask(task);
                 Path cache = cachePath(item.getCacheKey());
                 String rawMarkdown;
@@ -126,7 +140,7 @@ public class DocumentParseService {
                     item.setCacheHit(true);
                     cacheHits++;
                 } else {
-                    rawMarkdown = parse(item, task.getOptions());
+                    rawMarkdown = parse(item, task.getOptions(), parser);
                 }
                 long cleaningStarted = System.nanoTime();
                 var cleaning = DocumentCleaner.clean(requireText(rawMarkdown));
@@ -175,22 +189,21 @@ public class DocumentParseService {
         repository.saveTask(task);
     }
 
-    private String parse(ParseItem item, Map<String, Object> options) {
+    private String parse(ParseItem item, Map<String, Object> options, MultimodalDocumentParser parser) {
         String mode = String.valueOf(options.get("mode")).toLowerCase();
         MultimodalDocumentParser.ParseOptions parseOptions = new MultimodalDocumentParser.ParseOptions(
                 item.getItemId(), String.valueOf(options.get("model")),
                 Boolean.TRUE.equals(options.get("ocr")), Boolean.TRUE.equals(options.get("formula")),
                 Boolean.TRUE.equals(options.get("table")), String.valueOf(options.get("language")));
-        if ("tika".equals(mode) || ("auto".equals(mode) && !mineru.isAvailable())) {
+        if ("tika".equals(mode) || ("auto".equals(mode) && !parser.isAvailable())) {
             item.setParser("tika");
             return requireText(tika.parse(sourceLoader.load(item.getSource())));
         }
-        if (!mineru.isAvailable()) throw new IllegalStateException("mode=mineru时必须启用MinerU并配置MINERU_TOKEN");
         item.setParser("mineru-v4");
         try {
-            String markdown = mineru.canParseRemote(item.getSource())
-                    ? mineru.parseRemote(item.getSource(), parseOptions)
-                    : mineru.parseUpload(sourceLoader.load(item.getSource()), parseOptions);
+            String markdown = parser.canParseRemote(item.getSource())
+                    ? parser.parseRemote(item.getSource(), parseOptions)
+                    : parser.parseUpload(sourceLoader.load(item.getSource()), parseOptions);
             return requireText(markdown);
         } catch (RuntimeException primaryFailure) {
             if (!"auto".equals(mode) || Thread.currentThread().isInterrupted()) throw primaryFailure;
@@ -212,17 +225,14 @@ public class DocumentParseService {
     }
 
     private Path cachePath(String key) { return Path.of(properties.getRuntimeDir()).resolve("parse-cache").resolve(key + ".md"); }
-    private String cacheKey(String spaceId, String fingerprint, Map<String, Object> options) {
-        try { return sha256(mapper.writeValueAsString(Map.of("space", spaceId, "digest", fingerprint, "parser", parserProfile(options), "options", options))); }
+    private String cacheKey(String spaceId, String fingerprint, Map<String, Object> options, String profile) {
+        try { return sha256(mapper.writeValueAsString(Map.of("space", spaceId, "digest", fingerprint, "parser", profile, "options", options))); }
         catch (Exception e) { throw new IllegalStateException(e); }
     }
-    private String parserProfile(Map<String, Object> options) {
+    private String parserProfile(Map<String, Object> options, MultimodalDocumentParser parser) {
         String mode = String.valueOf(options.get("mode")).toLowerCase();
-        if ("tika".equals(mode) || ("auto".equals(mode) && !mineru.isAvailable())) return "tika-v2";
+        if ("tika".equals(mode) || ("auto".equals(mode) && !parser.isAvailable())) return "tika-v2";
         return "mineru-v4-upload-v1@" + properties.getMineru().getBaseUrl();
-    }
-    private String parserName(Map<String, Object> options) {
-        return parserProfile(options).startsWith("tika") ? "tika" : "mineru-v4";
     }
     private static void validateOptions(Map<String, Object> options) {
         String mode = String.valueOf(options.get("mode")).toLowerCase();

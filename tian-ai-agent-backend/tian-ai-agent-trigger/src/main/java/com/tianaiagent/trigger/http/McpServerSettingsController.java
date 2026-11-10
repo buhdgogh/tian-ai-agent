@@ -26,6 +26,18 @@ class McpServerSettingsController {
         return settings.list(identity.ownerId());
     }
 
+    @PostMapping
+    @ResponseStatus(HttpStatus.CREATED)
+    McpServerSettingsService.View importServer(@RequestBody McpServerRequest request,
+            @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
+        return settings.importServer(identity.ownerId(), request.url(), request.token(), request.tools());
+    }
+
+    @PostMapping("/discover")
+    List<McpServerSettingsService.ToolView> discoverNew(@RequestBody McpServerRequest request) {
+        return settings.discoverNew(request.url(), request.token());
+    }
+
     @PostMapping("/{id}/discover")
     List<McpServerSettingsService.ToolView> discover(@PathVariable String id, @RequestBody McpServerRequest request,
             @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {

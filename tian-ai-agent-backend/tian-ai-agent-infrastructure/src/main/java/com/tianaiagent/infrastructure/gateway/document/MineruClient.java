@@ -26,17 +26,27 @@ public class MineruClient implements MultimodalDocumentParser {
     private final DocMcpProperties properties;
     private final HttpClient http;
     private final ObjectMapper mapper;
+    private final String token;
 
     public MineruClient(DocMcpProperties properties, HttpClient http, ObjectMapper mapper) {
+        this(properties, http, mapper, properties.getMineru().getToken());
+    }
+
+    private MineruClient(DocMcpProperties properties, HttpClient http, ObjectMapper mapper, String token) {
         this.properties = properties;
         this.http = http;
         this.mapper = mapper;
+        this.token = token;
+    }
+
+    @Override
+    public MultimodalDocumentParser withToken(String token) {
+        return new MineruClient(properties, http, mapper, token);
     }
 
     public boolean isAvailable() {
         return properties.getMineru().isEnabled()
-                && properties.getMineru().getToken() != null
-                && !properties.getMineru().getToken().isBlank();
+                && token != null && !token.isBlank();
     }
 
     public boolean canParseRemote(String source) {
@@ -73,7 +83,7 @@ public class MineruClient implements MultimodalDocumentParser {
         String batchId = batchId(submitted);
         JsonNode urls = submitted.path("data").path("file_urls");
         if (!urls.isArray() || urls.isEmpty() || urls.get(0).asText("").isBlank()) {
-            throw new IllegalStateException("MinerU上传响应缺少file_urls: " + submitted);
+            throw new IllegalStateException("MinerU上传响应缺少file_urls");
         }
         upload(urls.get(0).asText(), source.bytes());
         return awaitMarkdown(batchId, options.dataId());
@@ -91,7 +101,7 @@ public class MineruClient implements MultimodalDocumentParser {
 
     private String batchId(JsonNode submitted) {
         String batchId = submitted.path("data").path("batch_id").asText("");
-        if (batchId.isBlank()) throw new IllegalStateException("MinerU提交响应缺少batch_id: " + submitted);
+        if (batchId.isBlank()) throw new IllegalStateException("MinerU提交响应缺少batch_id");
         return batchId;
     }
 
@@ -104,10 +114,10 @@ public class MineruClient implements MultimodalDocumentParser {
             if (results.isArray() && !results.isEmpty()) {
                 JsonNode item = findResult(results, dataId);
                 String state = item.path("state").asText("").toLowerCase();
-                if ("failed".equals(state)) throw new IllegalStateException("MinerU解析失败: " + item.path("err_msg").asText(item.toString()));
+                if ("failed".equals(state)) throw new IllegalStateException("MinerU解析失败");
                 if ("done".equals(state)) {
                     String zipUrl = item.path("full_zip_url").asText(item.path("zip_url").asText(""));
-                    if (zipUrl.isBlank()) throw new IllegalStateException("MinerU完成响应缺少结果包地址: " + item);
+                    if (zipUrl.isBlank()) throw new IllegalStateException("MinerU完成响应缺少结果包地址");
                     return markdownFromZip(download(zipUrl));
                 }
             }
@@ -135,7 +145,7 @@ public class MineruClient implements MultimodalDocumentParser {
             HttpResponse<String> response = http.send(upload,
                     HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
             if (response.statusCode() / 100 != 2) {
-                throw new IllegalStateException("MinerU文件上传失败 HTTP " + response.statusCode() + ": " + response.body());
+                throw new IllegalStateException("MinerU文件上传失败 HTTP " + response.statusCode());
             }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
@@ -150,14 +160,14 @@ public class MineruClient implements MultimodalDocumentParser {
         try {
             HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(trimSlash(properties.getMineru().getBaseUrl()) + path))
                     .timeout(Duration.ofMinutes(2))
-                    .header("Authorization", "Bearer " + properties.getMineru().getToken())
+                    .header("Authorization", "Bearer " + token)
                     .header("Content-Type", "application/json");
             if ("POST".equals(method)) builder.POST(HttpRequest.BodyPublishers.ofString(mapper.writeValueAsString(body), StandardCharsets.UTF_8));
             else builder.GET();
             HttpResponse<String> response = http.send(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
-            if (response.statusCode() / 100 != 2) throw new IllegalStateException("MinerU HTTP " + response.statusCode() + ": " + response.body());
+            if (response.statusCode() / 100 != 2) throw new IllegalStateException("MinerU HTTP " + response.statusCode());
             JsonNode json = mapper.readTree(response.body());
-            if (json.has("code") && json.path("code").asInt(0) != 0) throw new IllegalStateException("MinerU业务错误: " + json);
+            if (json.has("code") && json.path("code").asInt(0) != 0) throw new IllegalStateException("MinerU业务错误");
             return json;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt(); throw new IllegalStateException("MinerU请求被中断", e);

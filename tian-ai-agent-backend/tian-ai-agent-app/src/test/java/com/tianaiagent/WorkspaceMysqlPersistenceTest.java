@@ -1,5 +1,6 @@
 package com.tianaiagent;
 
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sun.net.httpserver.HttpServer;
 import com.tianaiagent.domain.agent.adapter.port.AgentTools;
@@ -37,6 +38,9 @@ import org.springframework.ai.chat.model.ChatModel;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
 import org.springframework.ai.chat.prompt.Prompt;
+import org.springframework.ai.openai.OpenAiChatModel;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.api.OpenAiApi;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -57,6 +61,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -80,7 +85,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "doc-mcp.mineru.enabled=false",
         "doc-mcp.vector-store=local",
         "doc-mcp.embedding.provider=local",
-        "spring.datasource.url=jdbc:h2:mem:mysql-persistence-knowledge;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:sqlite::memory:",
         "agent.memory.backend=file",
         "agent.memory.max-messages=2",
         "agent.memory.long-term.enabled=false",
@@ -136,6 +141,10 @@ class WorkspaceMysqlPersistenceTest {
                     exchange.sendResponseHeaders(204, -1);
                     return;
                 }
+                if (!"POST".equals(exchange.getRequestMethod())) {
+                    exchange.sendResponseHeaders(405, -1);
+                    return;
+                }
                 var request = json.readTree(exchange.getRequestBody());
                 String method = request.path("method").asText();
                 if (method.startsWith("notifications/")) {
@@ -154,8 +163,17 @@ class WorkspaceMysqlPersistenceTest {
                         MCP_CALLS.incrementAndGet();
                         var params = request.path("params");
                         if (!"echo".equals(params.path("name").asText())) throw new IllegalArgumentException("Unexpected tool");
+                        String text = params.path("arguments").path("text").asText();
+                        if ("mcp-round-trip".equals(text)) {
+                            try {
+                                Thread.sleep(7_000);
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                                throw new java.io.InterruptedIOException("MCP test server interrupted");
+                            }
+                        }
                         yield json.writeValueAsString(Map.of("content", List.of(Map.of("type", "text",
-                                "text", params.path("arguments").path("text").asText())), "isError", false));
+                                "text", text)), "isError", false));
                     }
                     default -> "{}";
                 };
@@ -192,6 +210,159 @@ class WorkspaceMysqlPersistenceTest {
     }
 
     @Test
+    void importsAnMcpEndpointAndRegistersItsToolsOnSave() throws Exception {
+        var body = mapper.createObjectNode().put("url", mcpOrigin + "/mcp").put("token", MCP_TOKEN);
+        var invalid = body.deepCopy().put("token", "wrong-test-token");
+        mvc.perform(post("/mcp-servers").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(invalid.toString()))
+                .andExpect(status().isBadGateway());
+        mvc.perform(get("/mcp-servers").header("Authorization", OWNER))
+                .andExpect(status().isOk()).andExpect(jsonPath("$").isEmpty());
+
+        var imported = mvc.perform(post("/mcp-servers").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.enabled").value(true))
+                .andExpect(jsonPath("$.tools[*].name").value(org.hamcrest.Matchers.contains("echo", "ignored")))
+                .andReturn().getResponse();
+        String id = mapper.readTree(imported.getContentAsString()).path("id").asText();
+        var run = audit.start("db_owner", "DISPATCH", null);
+        try {
+            var callbacks = AgentRunContext.within(run, () -> java.util.Arrays.stream(agentTools.forSpace(null, false))
+                    .filter(tool -> tool.getToolDefinition().name().startsWith("mcp_" + id + "_")).toList());
+            assertThat(callbacks).hasSize(2);
+            var echo = callbacks.stream().filter(tool -> tool.getToolDefinition().name().contains("_echo_"))
+                    .findFirst().orElseThrow();
+            assertThat(AgentRunContext.within(run, () -> echo.call("{\"text\":\"导入后可调用\"}")))
+                    .contains("导入后可调用");
+            mvc.perform(delete("/mcp-servers/{id}", id).header("Authorization", OWNER))
+                    .andExpect(status().isNoContent());
+            assertThat(AgentRunContext.within(run, () -> agentTools.forSpace(null, false)))
+                    .noneMatch(tool -> tool.getToolDefinition().name().startsWith("mcp_" + id + "_"));
+        } finally {
+            run.finish("COMPLETED");
+        }
+    }
+
+    @Test
+    void listsTheCurrentAccountsRegisteredMcpToolsWithoutCallingThem() throws Exception {
+        var body = mapper.createObjectNode().put("url", mcpOrigin + "/mcp").put("token", MCP_TOKEN);
+        body.putArray("tools").add("echo");
+        var imported = mvc.perform(post("/mcp-servers").header("Authorization", OTHER)
+                        .contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isCreated()).andReturn().getResponse();
+        String id = mapper.readTree(imported.getContentAsString()).path("id").asText();
+        int callsBefore = MCP_CALLS.get();
+        try {
+            String stream = dispatch(OTHER, "mcp-tool-inventory", "当前有哪些工具可用");
+            assertThat(stream).contains("TOOL_INVENTORY", "searchWeb", "个人 MCP 工具", "`echo`", "127.0.0.1")
+                    .doesNotContain("`ignored`", MCP_TOKEN, "event:tools");
+            String otherStream = dispatch(OWNER, "mcp-tool-inventory", "列出当前可用的 MCP 工具");
+            assertThat(otherStream).contains("MCP_TOOL_INVENTORY", "当前会话没有已启用的个人 MCP 工具")
+                    .doesNotContain("`echo`", "searchWeb");
+            var run = audit.recent("db_other").stream().filter(summary -> summary.kind().equals("DISPATCH"))
+                    .findFirst().orElseThrow();
+            assertThat(runs.find(run.id()).orElseThrow().events())
+                    .anyMatch(event -> "读取工具清单".equals(event.name()))
+                    .noneMatch(event -> "MODEL".equals(event.kind()) || "TOOL".equals(event.kind()));
+            assertThat(storedContents(ConversationScope.storageId("db_other", "mcp-tool-inventory", "general")))
+                    .anyMatch(text -> text.contains("`echo`"));
+        } finally {
+            mvc.perform(delete("/mcp-servers/{id}", id).header("Authorization", OTHER))
+                    .andExpect(status().isNoContent());
+        }
+        assertThat(dispatch(OTHER, "mcp-tool-inventory", "当前有哪些工具可用"))
+                .contains("当前会话没有已启用的个人 MCP 工具").doesNotContain("`echo`");
+        assertThat(MCP_CALLS.get()).isEqualTo(callsBefore);
+    }
+
+    @Test
+    void dispatchesARegisteredMcpToolAndReturnsItsResultToTheModel() throws Exception {
+        var body = mapper.createObjectNode().put("url", mcpOrigin + "/mcp").put("token", MCP_TOKEN);
+        body.putArray("tools").add("echo");
+        var imported = mvc.perform(post("/mcp-servers").header("Authorization", OTHER)
+                        .contentType(MediaType.APPLICATION_JSON).content(body.toString()))
+                .andExpect(status().isCreated()).andReturn().getResponse();
+        String id = mapper.readTree(imported.getContentAsString()).path("id").asText();
+        var offeredTool = new AtomicReference<JsonNode>();
+        var toolResult = new AtomicReference<String>();
+        String modelPath = "/test-model/chat/completions";
+        mcpServer.createContext(modelPath, exchange -> {
+            try (exchange) {
+                var payload = mapper.readTree(exchange.getRequestBody());
+                var reply = mapper.createObjectNode().put("id", "mcp-test").put("created", 1).put("model", "test-model");
+                var choice = reply.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop");
+                byte[] bytes;
+                if (!payload.path("stream").asBoolean()) {
+                    reply.put("object", "chat.completion");
+                    choice.putObject("message").put("role", "assistant").put("content",
+                            "{\"intentTypes\":[\"OTHER\"],\"confidence\":0.95,\"requiresWorkflow\":false}");
+                    exchange.getResponseHeaders().set("Content-Type", "application/json");
+                    bytes = mapper.writeValueAsBytes(reply);
+                } else {
+                    reply.put("object", "chat.completion.chunk");
+                    var delta = choice.putObject("delta").put("role", "assistant");
+                    for (var message : payload.path("messages")) {
+                        if ("tool".equals(message.path("role").asText())) {
+                            toolResult.set(message.path("content").asText());
+                        }
+                    }
+                    if (toolResult.get() != null) {
+                        delta.put("content", "MCP 调用完成");
+                    } else {
+                        for (var tool : payload.path("tools")) {
+                            var function = tool.path("function");
+                            if (function.path("name").asText().startsWith("mcp_" + id + "_echo_")) {
+                                offeredTool.set(function);
+                            }
+                        }
+                        if (offeredTool.get() == null) {
+                            delta.put("content", "未收到 MCP 工具");
+                        } else {
+                            choice.put("finish_reason", "tool_calls");
+                            delta.putArray("tool_calls").addObject().put("index", 0).put("id", "echo-1")
+                                    .put("type", "function").putObject("function")
+                                    .put("name", offeredTool.get().path("name").asText())
+                                    .put("arguments", "{\"text\":\"mcp-round-trip\"}");
+                        }
+                    }
+                    exchange.getResponseHeaders().set("Content-Type", "text/event-stream");
+                    bytes = ("data: " + reply + "\n\ndata: [DONE]\n\n").getBytes(StandardCharsets.UTF_8);
+                }
+                exchange.sendResponseHeaders(200, bytes.length);
+                exchange.getResponseBody().write(bytes);
+            }
+        });
+        var model = OpenAiChatModel.builder()
+                .openAiApi(OpenAiApi.builder().baseUrl(mcpOrigin + "/test-model")
+                        .completionsPath("/chat/completions").apiKey("mock-model-key").build())
+                .defaultOptions(OpenAiChatOptions.builder().model("test-model").build()).build();
+        chatModel.prepareTargets("db_other", List.of(new RoutedChatModel.Target("test", "test-model", 0, model)), true).run();
+        int callsBefore = MCP_CALLS.get();
+        try {
+            String stream = dispatch(OTHER, "mcp-round-trip-test", "请调用 MCP 的 echo 工具，把返回结果告诉我");
+            assertThat(offeredTool.get()).isNotNull();
+            String toolName = offeredTool.get().path("name").asText();
+            assertThat(offeredTool.get().path("description").asText()).contains("127.0.0.1", "echo", "Return input")
+                    .doesNotContain(MCP_TOKEN);
+            assertThat(offeredTool.get().path("parameters").path("properties").has("text")).isTrue();
+            assertThat(MCP_CALLS.get()).isEqualTo(callsBefore + 1);
+            assertThat(toolResult.get()).contains("mcp-round-trip");
+            assertThat(stream).contains("MCP 调用完成", "event:done");
+            var run = audit.recent("db_other").stream().filter(summary -> summary.kind().equals("DISPATCH"))
+                    .findFirst().orElseThrow();
+            assertThat(runs.find(run.id()).orElseThrow().events())
+                    .anyMatch(event -> "STAGE".equals(event.kind()) && "已加载 1 个个人 MCP 工具".equals(event.name()))
+                    .anyMatch(event -> "TOOL".equals(event.kind()) && toolName.equals(event.name())
+                            && "SUCCESS".equals(event.status()));
+        } finally {
+            chatModel.prepareTargets("db_other", List.of(), false).run();
+            mcpServer.removeContext(modelPath);
+            mvc.perform(delete("/mcp-servers/{id}", id).header("Authorization", OTHER))
+                    .andExpect(status().isNoContent());
+        }
+    }
+
+    @Test
     void discoversAndRunsOnlyApprovedPersonalMcpTools() throws Exception {
         var body = mapper.createObjectNode().put("url", mcpOrigin + "/mcp").put("token", MCP_TOKEN).put("enabled", true);
         body.putArray("tools").add("echo");
@@ -217,6 +388,7 @@ class WorkspaceMysqlPersistenceTest {
 
         var ownerRun = audit.start("db_owner", "DISPATCH", null);
         var otherRun = audit.start("db_other", "DISPATCH", null);
+        int callsBefore = MCP_CALLS.get();
         try {
             var callback = AgentRunContext.within(ownerRun, () -> java.util.Arrays.stream(agentTools.forSpace(null, false))
                     .filter(tool -> tool.getToolDefinition().name().startsWith("mcp_")).findFirst().orElseThrow());
@@ -224,11 +396,11 @@ class WorkspaceMysqlPersistenceTest {
                     .noneMatch(tool -> tool.getToolDefinition().name().startsWith("mcp_"));
             assertThat(AgentRunContext.within(ownerRun, () -> callback.call("{\"text\":\"工具回复\"}")))
                     .contains("工具回复");
-            assertThat(MCP_CALLS.get()).isEqualTo(1);
+            assertThat(MCP_CALLS.get()).isEqualTo(callsBefore + 1);
             mvc.perform(delete("/mcp-servers/echo-test").header("Authorization", OWNER)).andExpect(status().isNoContent());
             assertThat(AgentRunContext.within(ownerRun, () -> callback.call("{\"text\":\"撤销后\"}")))
                     .contains("MCP_TOOL_REVOKED");
-            assertThat(MCP_CALLS.get()).isEqualTo(1);
+            assertThat(MCP_CALLS.get()).isEqualTo(callsBefore + 1);
         } finally {
             ownerRun.finish("COMPLETED");
             otherRun.finish("COMPLETED");
@@ -368,8 +540,12 @@ class WorkspaceMysqlPersistenceTest {
     }
 
     private String dispatch(String chatId, String question) throws Exception {
+        return dispatch(OWNER, chatId, question);
+    }
+
+    private String dispatch(String authorization, String chatId, String question) throws Exception {
         var body = mapper.createObjectNode().put("chatId", chatId).put("message", question);
-        var pending = mvc.perform(post("/ai/dispatch/stream").header("Authorization", OWNER)
+        var pending = mvc.perform(post("/ai/dispatch/stream").header("Authorization", authorization)
                         .contentType(MediaType.APPLICATION_JSON).content(body.toString()))
                 .andExpect(request().asyncStarted()).andReturn();
         return mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn()

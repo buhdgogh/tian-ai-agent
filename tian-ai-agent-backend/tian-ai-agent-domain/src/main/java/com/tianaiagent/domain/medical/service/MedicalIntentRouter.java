@@ -17,10 +17,18 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /** 规则优先、LLM 兜底的医疗请求分层意图路由。 */
 @Service
 public class MedicalIntentRouter {
+    static final String TOOL_INVENTORY = "TOOL_INVENTORY";
+    static final String MCP_TOOL_INVENTORY = "MCP_TOOL_INVENTORY";
+    private static final Pattern TOOL_INVENTORY_REQUEST = Pattern.compile(
+            "(?:请问|请)?(?:你|系统)?(?:现在|当前|目前)?"
+                    + "(?:(?:有哪些|有什么|能用哪些|可以使用哪些|支持哪些)(?:可用的)?"
+                    + "|(?:列出|查看|显示)(?:当前|所有)?(?:可用的?)?)"
+                    + "(mcp)?工具(?:列表|清单|可用|可以用|可以使用)?");
     private static final int MAX_HISTORY_MESSAGES = 8;
     private static final int MAX_HISTORY_CHARS = 4_000;
     private static final Map<String, List<String>> KEYWORDS = Map.of(
@@ -57,6 +65,13 @@ public class MedicalIntentRouter {
         if (risk != null && risk.emergency()) {
             return new RoutingDecision(message.trim(), List.of("EMERGENCY"), 1.0,
                     "KEYWORD", false, riskLevel);
+        }
+
+        var inventory = TOOL_INVENTORY_REQUEST.matcher(
+                message.toLowerCase(Locale.ROOT).replaceAll("\\s+|[?？。！!]+$", ""));
+        if (inventory.matches()) {
+            String intent = inventory.group(1) == null ? TOOL_INVENTORY : MCP_TOOL_INVENTORY;
+            return new RoutingDecision(message.trim(), List.of(intent), 1.0, "KEYWORD", false, riskLevel);
         }
 
         Map<String, List<String>> keywords = medical ? KEYWORDS : GENERAL_KEYWORDS;

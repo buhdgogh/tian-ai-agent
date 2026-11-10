@@ -44,12 +44,16 @@ class MineruClientTest {
         byte[] document = "fake-pdf-content".getBytes(StandardCharsets.UTF_8);
         byte[] resultZip = markdownZip("# MinerU结果\n\n表格和公式");
         AtomicReference<byte[]> uploaded = new AtomicReference<>();
+        AtomicReference<String> authorization = new AtomicReference<>();
         server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         int port = server.getAddress().getPort();
         String baseUrl = "http://127.0.0.1:" + port;
-        server.createContext("/api/v4/file-urls/batch", exchange -> respond(exchange, 200,
+        server.createContext("/api/v4/file-urls/batch", exchange -> {
+            authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            respond(exchange, 200,
                 ("{\"code\":0,\"data\":{\"batch_id\":\"batch-1\",\"file_urls\":[\"" + baseUrl + "/upload\"]}}")
-                        .getBytes(StandardCharsets.UTF_8)));
+                        .getBytes(StandardCharsets.UTF_8));
+        });
         server.createContext("/upload", exchange -> {
             uploaded.set(exchange.getRequestBody().readAllBytes());
             respond(exchange, 200, new byte[0]);
@@ -68,11 +72,13 @@ class MineruClientTest {
         properties.getMineru().setTimeout(Duration.ofSeconds(2));
         MineruClient client = new MineruClient(properties, HttpClient.newHttpClient(), new ObjectMapper());
 
-        String markdown = client.parseUpload(
+        assertTrue(!client.withToken("").isAvailable());
+        String markdown = client.withToken("personal-test-token").parseUpload(
                 new SourceLoader.LoadedSource(document, "report.pdf", "file:///report.pdf"),
                 new MineruClient.ParseOptions("item-1", "vlm", true, true, true, "ch"));
 
         assertEquals("# MinerU结果\n\n表格和公式", markdown);
+        assertEquals("Bearer personal-test-token", authorization.get());
         assertTrue(java.util.Arrays.equals(document, uploaded.get()));
     }
 

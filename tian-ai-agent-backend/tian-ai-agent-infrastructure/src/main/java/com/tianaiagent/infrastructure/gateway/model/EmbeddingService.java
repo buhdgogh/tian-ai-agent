@@ -114,9 +114,9 @@ public class EmbeddingService implements TextEmbedding {
 
     static float[] normalize(float[] vector) {
         double norm = 0;
-        for (float value : vector) norm += value * value;
+        for (float value : vector) norm += (double) value * value;
         if (norm == 0) return vector;
-        float divisor = (float) Math.sqrt(norm);
+        double divisor = Math.sqrt(norm);
         for (int i = 0; i < vector.length; i++) vector[i] /= divisor;
         return vector;
     }

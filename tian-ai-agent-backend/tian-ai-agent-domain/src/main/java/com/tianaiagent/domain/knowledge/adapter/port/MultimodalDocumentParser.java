@@ -3,6 +3,8 @@ package com.tianaiagent.domain.knowledge.adapter.port;
 import com.tianaiagent.domain.knowledge.adapter.port.DocumentSource.LoadedSource;
 
 public interface MultimodalDocumentParser {
+    MultimodalDocumentParser withToken(String token);
+
     boolean isAvailable();
 
     boolean canParseRemote(String source);

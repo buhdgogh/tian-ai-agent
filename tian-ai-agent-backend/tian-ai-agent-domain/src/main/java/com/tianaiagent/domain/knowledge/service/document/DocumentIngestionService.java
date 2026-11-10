@@ -77,9 +77,9 @@ public class DocumentIngestionService implements DocumentIndexer {
      * @param contentSha256 原始文件内容 SHA-256
      */
     public ParseIndexResult parseAndIndex(String spaceId, String docId, String fileSource, String contentSha256,
-                                          Map<String, Object> documentMetadata) {
+                                          Map<String, Object> documentMetadata, String ownerId) {
         PendingParse pending = new PendingParse(
-                spaceId, docId, fileSource, contentSha256, Map.copyOf(documentMetadata),
+                ownerId, spaceId, docId, fileSource, contentSha256, Map.copyOf(documentMetadata),
                 System.nanoTime(), new CompletableFuture<>());
         List<PendingParse> ready = null;
         synchronized (batchLock) {
@@ -120,10 +120,17 @@ public class DocumentIngestionService implements DocumentIndexer {
     }
 
     private List<PendingParse> drainPendingLocked() {
-        int size = Math.min(pendingParses.size(), Math.max(1, batchMaxSize));
-        if (size == 0) return List.of();
-        List<PendingParse> batch = new ArrayList<>(pendingParses.subList(0, size));
-        pendingParses.subList(0, size).clear();
+        if (pendingParses.isEmpty()) return List.of();
+        String ownerId = pendingParses.getFirst().ownerId();
+        int limit = Math.max(1, batchMaxSize);
+        List<PendingParse> batch = new ArrayList<>();
+        for (var iterator = pendingParses.iterator(); iterator.hasNext() && batch.size() < limit;) {
+            PendingParse next = iterator.next();
+            if (Objects.equals(ownerId, next.ownerId())) {
+                batch.add(next);
+                iterator.remove();
+            }
+        }
         if (!pendingParses.isEmpty() && scheduledFlush == null && batchScheduler != null) {
             scheduledFlush = batchScheduler.schedule(
                     this::flushPending, Math.max(0, batchWindowMs), TimeUnit.MILLISECONDS);
@@ -156,7 +163,7 @@ public class DocumentIngestionService implements DocumentIndexer {
 
             ParseTask task = parsing.submit(new DocumentParseService.ParseRequest(
                     sources, hashes, docIds, spaceIds, documentMetadatas, "auto", "vlm",
-                    false, true, true, "ch", true));
+                    false, true, true, "ch", true), batch.getFirst().ownerId());
             String taskId = task.getTaskId();
             long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(timeoutSeconds);
             int consecutivePollFailures = 0;
@@ -250,6 +257,7 @@ public class DocumentIngestionService implements DocumentIndexer {
     }
 
     private record PendingParse(
+            String ownerId,
             String spaceId,
             String docId,
             String fileSource,

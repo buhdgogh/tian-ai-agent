@@ -18,7 +18,8 @@ import java.util.List;
 import java.util.Map;
 
 public final class StreamableMcpToolClient implements McpToolClient {
-    private static final Duration TIMEOUT = Duration.ofSeconds(6);
+    private static final Duration CONNECT_TIMEOUT = Duration.ofSeconds(6);
+    private static final Duration TOOL_CALL_TIMEOUT = Duration.ofSeconds(20);
     private static final int MAX_RESULT_CHARS = 20_000;
     private final ObjectMapper mapper;
     private final JacksonMcpJsonMapper mcpMapper;
@@ -30,7 +31,7 @@ public final class StreamableMcpToolClient implements McpToolClient {
 
     @Override
     public List<McpServer.Tool> discover(String url, String token) {
-        try (var client = connect(url, token)) {
+        try (var client = connect(url, token, CONNECT_TIMEOUT)) {
             var tools = new LinkedHashMap<String, McpServer.Tool>();
             String cursor = null;
             for (int page = 0; page < 4; page++) {
@@ -63,7 +64,7 @@ public final class StreamableMcpToolClient implements McpToolClient {
         } catch (JsonProcessingException e) {
             return "{\"ok\":false,\"errorCode\":\"MCP_INVALID_ARGUMENTS\"}";
         }
-        try (var client = connect(url, token)) {
+        try (var client = connect(url, token, TOOL_CALL_TIMEOUT)) {
             var result = client.callTool(new McpSchema.CallToolRequest(mcpMapper, name, arguments == null ? "{}" : arguments));
             if (Boolean.TRUE.equals(result.isError())) return "{\"ok\":false,\"errorCode\":\"MCP_TOOL_ERROR\"}";
             if (result.structuredContent() != null) {
@@ -88,20 +89,20 @@ public final class StreamableMcpToolClient implements McpToolClient {
         return mapper.writeValueAsString(Map.of("ok", true, "output", limit(text, MAX_RESULT_CHARS)));
     }
 
-    private McpSyncClient connect(String url, String token) {
+    private McpSyncClient connect(String url, String token, Duration requestTimeout) {
         URI uri = URI.create(url);
         var transport = HttpClientStreamableHttpTransport.builder(uri.getScheme() + "://" + uri.getRawAuthority())
                 .endpoint(uri.getRawPath().isEmpty() ? "/" : uri.getRawPath())
-                .clientBuilder(HttpClient.newBuilder().connectTimeout(TIMEOUT).followRedirects(HttpClient.Redirect.NEVER))
+                .clientBuilder(HttpClient.newBuilder().connectTimeout(CONNECT_TIMEOUT).followRedirects(HttpClient.Redirect.NEVER))
                 .customizeRequest(request -> {
-                    request.timeout(TIMEOUT);
+                    request.timeout(requestTimeout);
                     if (token != null) request.header("Authorization", "Bearer " + token);
                 })
                 .jsonMapper(mcpMapper)
                 .openConnectionOnStartup(false)
                 .resumableStreams(false)
                 .build();
-        var client = McpClient.sync(transport).requestTimeout(TIMEOUT).initializationTimeout(TIMEOUT)
+        var client = McpClient.sync(transport).requestTimeout(requestTimeout).initializationTimeout(CONNECT_TIMEOUT)
                 .enableCallToolSchemaCaching(false).loggingConsumer(message -> {}).build();
         try {
             client.initialize();

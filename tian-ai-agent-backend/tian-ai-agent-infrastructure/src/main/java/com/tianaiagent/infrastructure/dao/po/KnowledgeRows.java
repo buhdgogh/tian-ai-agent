@@ -3,7 +3,7 @@ package com.tianaiagent.infrastructure.dao.po;
 public final class KnowledgeRows {
     private KnowledgeRows() {}
 
-    public record Space(String spaceId, String name, boolean medical, boolean deleting) {}
+    public record Space(String spaceId, String name, boolean medical, boolean deleting, String embeddingBinding) {}
 
     public record Source(String docId, String title, String updatedAt, String metadataJson) {}
 

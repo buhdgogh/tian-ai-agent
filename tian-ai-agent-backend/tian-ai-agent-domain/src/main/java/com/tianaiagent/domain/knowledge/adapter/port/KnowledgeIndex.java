@@ -5,7 +5,7 @@ import java.util.List;
 import java.util.Map;
 
 public interface KnowledgeIndex {
-    KnowledgeSpace createSpace(String name, boolean medical);
+    KnowledgeSpace createSpace(String name, boolean medical, String ownerId, String embeddingProviderId);
 
     List<KnowledgeSpace> listSpaces();
 

@@ -3,7 +3,7 @@
     <header class="ui-page-heading">
       <div>
         <h1>模型设置</h1>
-        <p>配置自己的模型和 API Key，保存后用于当前账号的 Agent 问答和工作流。</p>
+        <p>配置自己的模型和 API Key。对话模型用于 Agent 问答和工作流，嵌入模型可在创建知识库时选择。</p>
       </div>
       <button class="ui-button" type="button" :disabled="busy" @click="reload">重新加载</button>
     </header>
@@ -16,7 +16,7 @@
       <p class="settings-hint">优先级数字越小越先尝试，相同优先级轮询。清空列表后保存，可恢复平台默认模型（如已配置）。</p>
       <fieldset v-for="(row, index) in rows" :key="row.clientId" class="ui-panel provider" :disabled="busy">
         <div class="provider-heading">
-          <h2>{{ row.model || '模型 ' + (index + 1) }}</h2>
+          <h2>{{ row.model || '模型 ' + (index + 1) }}<span v-if="isEmbedding(row)" class="ui-pill">向量嵌入</span></h2>
           <div class="actions">
             <label class="toggle"><input v-model="row.enabled" type="checkbox" /> 启用</label>
             <button class="ui-button" type="button" @click="rows.splice(index, 1)">移除</button>
@@ -47,14 +47,22 @@
               <select :value="row.protocol" class="ui-field" @change="selectProtocol(row, $event.target.value)">
                 <option value="OPENAI_COMPATIBLE">OpenAI 兼容</option>
                 <option value="ANTHROPIC">Anthropic</option>
+                <option value="OPENAI_EMBEDDING">OpenAI 兼容嵌入</option>
                 <option v-if="row.savedProtocol === 'DASHSCOPE'" value="DASHSCOPE">DashScope 原生</option>
               </select>
             </label>
             <label>Base URL
               <input v-model.trim="row.baseUrl" class="ui-field" type="url" required maxlength="500"
-                placeholder="https://api.example.com/v1" @input="row.presetId = 'custom'" />
+                placeholder="https://api.example.com/v1" :aria-describedby="isEmbedding(row) ? 'embedding-url-help-' + row.clientId : undefined"
+                @input="row.presetId = 'custom'" @invalid="explainWorkspacePlaceholder" />
+              <small v-if="isEmbedding(row)" :id="'embedding-url-help-' + row.clientId" class="settings-hint"
+                :role="hasWorkspacePlaceholder(row.baseUrl) ? 'alert' : undefined">
+                {{ hasWorkspacePlaceholder(row.baseUrl)
+                  ? '请将占位符（含括号）替换为百炼控制台中的真实业务空间 ID。'
+                  : '百炼北京专属地址可直接填写，保存时会将 /api/v1 转为 /compatible-mode/v1。' }}
+              </small>
             </label>
-            <label>优先级
+            <label v-if="!isEmbedding(row)">优先级
               <input v-model.number="row.priority" class="ui-field" type="number" required min="-2147483648" max="2147483647" step="1" />
             </label>
             <label>提供商标识
@@ -77,6 +85,7 @@
       <div class="actions form-actions">
         <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('openai')">添加 OpenAI 兼容模型</button>
         <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('claude')">添加 Anthropic 模型</button>
+        <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('openai-embedding')">添加向量嵌入模型</button>
         <button class="ui-button primary" type="submit" :disabled="busy">{{ busy ? '处理中…' : '保存配置' }}</button>
       </div>
       <p class="settings-hint">常见提供商会自动填入地址和协议。其它地域或自建网关可在高级设置中调整，修改地址或协议时需要重新输入对应的 API Key。</p>
@@ -95,6 +104,8 @@ const presets = [
   { id: 'openai', name: 'OpenAI', baseUrl: 'https://api.openai.com/v1', protocol: 'OPENAI_COMPATIBLE' },
   { id: 'claude', name: 'Claude（Anthropic）', baseUrl: 'https://api.anthropic.com', protocol: 'ANTHROPIC' },
   { id: 'dashscope', name: '阿里云百炼（原生）', baseUrl: 'https://dashscope.aliyuncs.com', protocol: 'DASHSCOPE' },
+  { id: 'openai-embedding', name: 'OpenAI 嵌入', baseUrl: 'https://api.openai.com/v1', protocol: 'OPENAI_EMBEDDING' },
+  { id: 'qwen-embedding', name: '阿里云百炼嵌入（北京）', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', protocol: 'OPENAI_EMBEDDING' },
   { id: 'custom', name: '自定义' }
 ]
 
@@ -114,6 +125,14 @@ const apply = data => {
   }))
 }
 
+const isEmbedding = row => row.protocol === 'OPENAI_EMBEDDING'
+const hasWorkspacePlaceholder = value => /\[workspace-?id\]|\{workspace-?id\}/i.test(value)
+
+function explainWorkspacePlaceholder(event) {
+  if (!event.target.hasAttribute('aria-describedby') || !hasWorkspacePlaceholder(event.target.value)) return
+  event.preventDefault()
+  event.target.focus()
+}
 const needsKey = row => !row.hasApiKey || row.savedProtocol !== row.protocol || row.savedBaseUrl !== row.baseUrl
 
 function providerId(presetId, clientId) {
@@ -137,7 +156,7 @@ function selectPreset(row) {
 }
 
 function selectProtocol(row, protocol) {
-  row.presetId = { OPENAI_COMPATIBLE: 'openai', ANTHROPIC: 'claude', DASHSCOPE: 'dashscope' }[protocol]
+  row.presetId = { OPENAI_COMPATIBLE: 'openai', ANTHROPIC: 'claude', DASHSCOPE: 'dashscope', OPENAI_EMBEDDING: 'openai-embedding' }[protocol]
   selectPreset(row)
 }
 
@@ -196,6 +215,7 @@ onMounted(reload)
 .provider { display: grid; gap: 14px; margin: 0; padding: 16px; }
 .provider-heading, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .provider-heading { justify-content: space-between; }
+.provider-heading h2 .ui-pill { margin-inline-start: 8px; }
 .provider-heading h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .fields label { display: grid; align-content: start; gap: 5px; }

@@ -159,7 +159,9 @@ public class KnowledgeBaseService {
         }
     }
 
-    public KnowledgeSpace createSpace(String name, boolean medical) { return index().createSpace(name, medical); }
+    public KnowledgeSpace createSpace(String name, boolean medical, String ownerId, String embeddingProviderId) {
+        return index().createSpace(name, medical, ownerId, embeddingProviderId);
+    }
 
     public List<KnowledgeSpace> listSpaces() { return index().listSpaces(); }
 
@@ -314,7 +316,7 @@ public class KnowledgeBaseService {
                     taskInput,
                     context -> processDocument(
                             context, spaceId, id, originalName, queuedNanos, localSaveMs, metadata,
-                            fileSource, contentSha256, sha256Ms, sourcePrepareMs));
+                            fileSource, contentSha256, sha256Ms, sourcePrepareMs, ownerId));
             submitted = true;
             attachIndexTask(id, task.getId());
             result.put("status", "QUEUED");
@@ -395,7 +397,7 @@ public class KnowledgeBaseService {
                                                 String originalName, long queuedNanos,
                                                 long localSaveMs, MedicalDocumentMetadata medicalMetadata,
                                                 String fileSource, String contentSha256,
-                                                long sha256Ms, long sourcePrepareMs) throws Exception {
+                                                long sha256Ms, long sourcePrepareMs, String ownerId) throws Exception {
         long totalStarted = System.nanoTime();
         Map<String, Object> timings = new LinkedHashMap<>();
         timings.put("localSaveMs", localSaveMs);
@@ -409,11 +411,11 @@ public class KnowledgeBaseService {
                 recordIndexMeta(id, "PARSING_INDEXING", null, null, context.taskId());
             }
             context.update(30, "文档服务解析并索引",
-                    "原文已就绪，等待Java文档MCP调用MinerU并完成分层切片和向量索引");
+                    "原文已就绪，等待文档解析、分层切片和向量索引");
             long documentMcpStarted = System.nanoTime();
             DocumentIndexer.ParseIndexResult indexResult =
                     documentIndexer.orElseThrow(McpDisabledException::new).parseAndIndex(spaceId, id, fileSource, contentSha256,
-                            documentMetadata(medicalMetadata, originalName));
+                            documentMetadata(medicalMetadata, originalName), ownerId);
             timings.put("documentMcpParseIndexMs", elapsedMs(documentMcpStarted));
             timings.put("documentMcp", indexResult.timings());
             timings.put("totalMs", elapsedMs(totalStarted));
@@ -659,19 +661,19 @@ public class KnowledgeBaseService {
 
     /** 返回LLM生成的回答和参与生成的可追溯原文证据。 */
     public JsonNode queryWithSources(String spaceId, String question, Integer topK) {
-        space(spaceId);
+        boolean semanticCache = space(spaceId).embedding() == null;
         if (question == null || question.isBlank()) {
             throw new RuntimeException("查询内容不能为空");
         }
         int limit = topK == null ? 8 : Math.max(1, Math.min(topK, 20));
         String normalizedQuestion = question.trim();
         String version = knowledgeVersion(spaceId);
-        var cached = semanticRagCache.get(spaceId, normalizedQuestion, limit, version);
+        var cached = semanticRagCache.get(spaceId, normalizedQuestion, limit, version, semanticCache);
         KnowledgeIndex.Answer answer = cached.map(KnowledgeAnswerCache.Hit::answer).orElseGet(() -> {
             KnowledgeIndex.Answer fresh = index().queryWithSources(spaceId, normalizedQuestion, limit);
             synchronized (this) {
                 space(spaceId);
-                semanticRagCache.put(spaceId, normalizedQuestion, limit, version, fresh);
+                semanticRagCache.put(spaceId, normalizedQuestion, limit, version, fresh, semanticCache);
             }
             return fresh;
         });

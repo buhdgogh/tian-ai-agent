@@ -80,7 +80,9 @@ class ModelRoutingIntegrationTest {
             SECONDARY_REQUEST.set(payload);
             SECONDARY_AUTH.set(exchange.getRequestHeaders().getFirst("Authorization"));
             var parsed = new ObjectMapper().readTree(payload);
-            if (parsed.path("stream").asBoolean() && payload.contains("Java怎么学") && STREAM_GATE.get() != null) {
+            if (payload.contains("工作区集成验证")) {
+                respondWorkspaceModel(exchange, parsed);
+            } else if (parsed.path("stream").asBoolean() && payload.contains("Java怎么学") && STREAM_GATE.get() != null) {
                 var gate = STREAM_GATE.get();
                 exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=UTF-8");
                 exchange.sendResponseHeaders(200, 0);
@@ -452,6 +454,116 @@ class ModelRoutingIntegrationTest {
     }
 
     @Test
+    void workspacePresetsArePrivateAndSelectedSkillsOnlyReachTheCurrentModelRequest() throws Exception {
+        String chatId = "skill-" + java.util.UUID.randomUUID();
+        var skill = mapper.createObjectNode().put("name", "学习提纲").put("content", "用三点清单回答。").put("enabled", true);
+        var template = mapper.createObjectNode().put("name", "学习问题").put("content", "请解释 {主题}。");
+        String skillId = mapper.readTree(mvc.perform(post("/skills").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(skill.toString()))
+                .andExpect(status().isCreated()).andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8))
+                .path("id").asText();
+        String templateId = mapper.readTree(mvc.perform(post("/prompt-templates").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(template.toString()))
+                .andExpect(status().isCreated()).andExpect(jsonPath("$.enabled").value(true))
+                .andReturn().getResponse().getContentAsString(StandardCharsets.UTF_8)).path("id").asText();
+        try {
+            mvc.perform(get("/skills").header("Authorization", OTHER)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$[?(@.id == '%s')]".formatted(skillId)).isEmpty());
+            mvc.perform(get("/prompt-templates").header("Authorization", OWNER)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$[?(@.id == '%s')].content".formatted(templateId)).value("请解释 {主题}。"));
+            mvc.perform(delete("/prompt-templates/{id}", templateId).header("Authorization", OTHER))
+                    .andExpect(status().isNotFound());
+
+            var turn = mapper.createObjectNode().put("chatId", chatId).put("message", "Java怎么学");
+            turn.putArray("skillIds").add(skillId);
+            mvc.perform(post("/ai/dispatch/stream").header("Authorization", OTHER)
+                            .contentType(MediaType.APPLICATION_JSON).content(turn.toString()))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.message").value("所选 Skill 不可用，请刷新后重新选择"));
+
+            var pending = mvc.perform(post("/ai/dispatch/stream").header("Authorization", OWNER)
+                            .contentType(MediaType.APPLICATION_JSON).content(turn.toString()))
+                    .andExpect(request().asyncStarted()).andReturn();
+            mvc.perform(asyncDispatch(pending)).andExpect(status().isOk());
+            var messages = mapper.readTree(SECONDARY_REQUEST.get()).path("messages");
+            assertThat(messages.get(0).path("content").asText()).doesNotContain("用三点清单回答。");
+            assertThat(messages.get(messages.size() - 1).path("content").asText())
+                    .startsWith("Java怎么学").contains("学习提纲", "用三点清单回答。");
+            mvc.perform(get("/ai/sessions/{id}/messages", chatId).param("workspace", "true").param("type", "agent")
+                            .header("Authorization", OWNER))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$[0].text").value("Java怎么学"));
+
+            skill.put("enabled", false);
+            mvc.perform(put("/skills/{id}", skillId).header("Authorization", OWNER)
+                            .contentType(MediaType.APPLICATION_JSON).content(skill.toString()))
+                    .andExpect(status().isOk()).andExpect(jsonPath("$.enabled").value(false));
+            mvc.perform(post("/ai/dispatch/stream").header("Authorization", OWNER)
+                            .contentType(MediaType.APPLICATION_JSON).content(turn.toString()))
+                    .andExpect(status().isBadRequest());
+        } finally {
+            mvc.perform(delete("/skills/{id}", skillId).header("Authorization", OWNER)).andExpect(status().isNoContent());
+            mvc.perform(delete("/prompt-templates/{id}", templateId).header("Authorization", OWNER))
+                    .andExpect(status().isNoContent());
+        }
+    }
+
+    @Test
+    void workspaceAgentReadsDirectoryAndFileThroughTheAuthenticatedBrowserStream() throws Exception {
+        String chatId = "workspace-" + java.util.UUID.randomUUID();
+        var requestBody = mapper.createObjectNode().put("chatId", chatId)
+                .put("message", "工作区集成验证，请说明构建工具").put("localWorkspace", true);
+        var pending = mvc.perform(post("/ai/dispatch/stream").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(requestBody.toString()))
+                .andExpect(request().asyncStarted()).andReturn();
+
+        var list = awaitWorkspaceEvent(pending, 0);
+        assertThat(list.path("action").asText()).isEqualTo("LIST");
+        assertThat(list.path("path").asText()).isEmpty();
+        String runId = latestRun();
+        String listId = list.path("requestId").asText();
+        var toolNames = mapper.readTree(SECONDARY_REQUEST.get()).path("tools").findValuesAsText("name");
+        assertThat(toolNames).containsExactlyInAnyOrder("listWorkspaceFiles", "readWorkspaceFile", "doTerminate");
+        String listResponse = """
+                {"ok":true,"entries":[{"name":"pom.xml","kind":"file"}]}
+                """;
+        mvc.perform(post("/ai/local-workspace/{runId}/results/{requestId}", runId, listId)
+                        .header("Authorization", OTHER).contentType(MediaType.APPLICATION_JSON).content(listResponse))
+                .andExpect(status().isNotFound());
+        mvc.perform(post("/ai/local-workspace/{runId}/results/{requestId}", runId, listId)
+                        .header("Authorization", OWNER).contentType(MediaType.APPLICATION_JSON).content(listResponse))
+                .andExpect(status().isNoContent());
+
+        var read = awaitWorkspaceEvent(pending, 1);
+        assertThat(read.path("action").asText()).isEqualTo("READ");
+        assertThat(read.path("path").asText()).isEqualTo("pom.xml");
+        mvc.perform(post("/ai/local-workspace/{runId}/results/{requestId}", runId, read.path("requestId").asText())
+                        .header("Authorization", OWNER).contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"ok\":true,\"content\":\"WORKSPACE_FILE_TEST_CONTENT\"}"))
+                .andExpect(status().isNoContent());
+
+        var response = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).contains("项目使用 Maven", "event:done");
+        mvc.perform(get("/ai/sessions/{id}/messages", chatId).param("workspace", "true").param("type", "agent")
+                        .header("Authorization", OWNER))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
+                .andExpect(jsonPath("$[1].text").value("项目使用 Maven"));
+    }
+
+    private com.fasterxml.jackson.databind.JsonNode awaitWorkspaceEvent(
+            org.springframework.test.web.servlet.MvcResult pending, int index) throws Exception {
+        var events = new AtomicReference<java.util.List<String>>();
+        org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(8)).untilAsserted(() -> {
+            String stream = pending.getResponse().getContentAsString(StandardCharsets.UTF_8);
+            events.set(java.util.Arrays.stream(stream.split("\\R\\R"))
+                    .filter(event -> event.startsWith("event:workspace_request")).toList());
+            assertThat(events.get().size()).isGreaterThan(index);
+        });
+        String data = events.get().get(index).lines().filter(line -> line.startsWith("data:"))
+                .findFirst().orElseThrow().substring(5);
+        return mapper.readTree(data);
+    }
+
+    @Test
     void dispatchDeliversTheFirstModelDeltaBeforeUpstreamCompletes() throws Exception {
         var gate = new java.util.concurrent.CountDownLatch(1);
         STREAM_GATE.set(gate);
@@ -518,6 +630,37 @@ class ModelRoutingIntegrationTest {
 
     private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String body) throws IOException {
         respond(exchange, status, "application/json; charset=UTF-8", body);
+    }
+
+    private static void respondWorkspaceModel(com.sun.net.httpserver.HttpExchange exchange,
+                                              com.fasterxml.jackson.databind.JsonNode request) throws IOException {
+        var json = new ObjectMapper();
+        if (!request.path("stream").asBoolean()) {
+            var response = json.createObjectNode().put("id", "workspace-route").put("object", "chat.completion")
+                    .put("created", 1).put("model", "secondary-actual");
+            response.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop").putObject("message")
+                    .put("role", "assistant").put("content",
+                            "{\"intentTypes\":[\"OTHER\"],\"confidence\":1,\"requiresWorkflow\":true}");
+            respond(exchange, 200, response.toString());
+            return;
+        }
+        var messages = request.path("messages");
+        long toolReplies = messages.findValuesAsText("role").stream().filter("tool"::equals).count();
+        var response = json.createObjectNode().put("id", "workspace-turn-" + toolReplies)
+                .put("object", "chat.completion.chunk").put("created", 1).put("model", "secondary-actual");
+        var choice = response.putArray("choices").addObject().put("index", 0);
+        var delta = choice.putObject("delta").put("role", "assistant");
+        if (toolReplies < 2) {
+            choice.put("finish_reason", "tool_calls");
+            delta.putArray("tool_calls").addObject().put("index", 0).put("id", "workspace-tool-" + toolReplies)
+                    .put("type", "function").putObject("function")
+                    .put("name", toolReplies == 0 ? "listWorkspaceFiles" : "readWorkspaceFile")
+                    .put("arguments", toolReplies == 0 ? "{}" : "{\"path\":\"pom.xml\"}");
+        } else {
+            choice.put("finish_reason", "stop");
+            delta.put("content", messages.toString().contains("WORKSPACE_FILE_TEST_CONTENT") ? "项目使用 Maven" : "未取得文件");
+        }
+        respond(exchange, 200, "text/event-stream", "data: " + response + "\n\ndata: [DONE]\n\n");
     }
 
     private static void respond(com.sun.net.httpserver.HttpExchange exchange, int status, String contentType, String body)

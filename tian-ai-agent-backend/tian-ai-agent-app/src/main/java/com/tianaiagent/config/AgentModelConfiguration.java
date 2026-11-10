@@ -55,6 +55,8 @@ import java.util.function.Predicate;
 @EnableConfigurationProperties({AgentModelProperties.class, DashScopeChatProperties.class,
         DashScopeConnectionProperties.class, DashScopeEmbeddingProperties.class})
 class AgentModelConfiguration {
+    private static final String BEIJING_WORKSPACE_EMBEDDING_ORIGIN = "https://*.cn-beijing.maas.aliyuncs.com";
+
     @Bean(name = {"routedChatModel", "dashscopeChatModel"})
     @Primary
     RoutedChatModel routedChatModel(AgentModelProperties config, ModelTargets targets) {
@@ -65,7 +67,9 @@ class AgentModelConfiguration {
     ModelProviderSettingsService modelProviderSettingsService(ModelProviderStore store, ModelTargets targets,
                                                                RoutedChatModel router, AgentModelProperties config) {
         Set<Origin> origins = new HashSet<>();
+        boolean allowBeijingWorkspaceEmbeddings = config.allowedUserOrigins().contains(BEIJING_WORKSPACE_EMBEDDING_ORIGIN);
         for (String url : config.allowedUserOrigins()) {
+            if (BEIJING_WORKSPACE_EMBEDDING_ORIGIN.equals(url)) continue;
             URI uri = URI.create(url);
             if (uri.getHost() == null || !Set.of("http", "https").contains(uri.getScheme())
                     || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
@@ -74,10 +78,13 @@ class AgentModelConfiguration {
             }
             origins.add(Origin.from(uri));
         }
-        Predicate<ModelProvider> allowed = provider -> origins.contains(Origin.from(URI.create(provider.baseUrl())));
+        Predicate<ModelProvider> allowed = provider -> origins.contains(Origin.from(URI.create(provider.baseUrl())))
+                || (allowBeijingWorkspaceEmbeddings && provider.usesBeijingWorkspaceEmbedding());
         return new ModelProviderSettingsService(store, allowed, (owner, providers) -> {
-            var permitted = providers.stream().filter(ModelProvider::enabled).filter(allowed).toList();
-            return router.prepareTargets(owner, targets.build().apply(permitted), !providers.isEmpty());
+            var chatProviders = providers.stream()
+                    .filter(provider -> provider.protocol() != ModelProvider.Protocol.OPENAI_EMBEDDING).toList();
+            var permitted = chatProviders.stream().filter(ModelProvider::enabled).filter(allowed).toList();
+            return router.prepareTargets(owner, targets.build().apply(permitted), !chatProviders.isEmpty());
         });
     }
 
@@ -137,6 +144,7 @@ class AgentModelConfiguration {
                                 .defaultOptions(AnthropicChatOptions.builder().model(provider.model()).maxTokens(4096).build())
                                 .toolCallingManager(toolManager).retryTemplate(retry).build();
                     }
+                    case OPENAI_EMBEDDING -> throw new IllegalArgumentException("嵌入模型不能用于聊天");
                 };
                 targets.add(new RoutedChatModel.Target(provider.id(), provider.model(), provider.priority(), model));
             }

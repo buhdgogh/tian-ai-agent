@@ -4,7 +4,7 @@ import java.util.Map;
 
 public interface DocumentIndexer {
     ParseIndexResult parseAndIndex(String spaceId, String docId, String fileSource, String contentSha256,
-                                   Map<String, Object> documentMetadata);
+                                   Map<String, Object> documentMetadata, String ownerId);
 
     record ParseIndexResult(String taskId, int documentCount, int leafNodeCount, Map<String, Object> timings,
                             boolean degraded) {

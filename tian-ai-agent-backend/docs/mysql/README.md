@@ -1,12 +1,16 @@
 # MySQL 部署配置
 
-MySQL 和 Spring Boot 均在 Windows 本机运行，后端默认通过 `127.0.0.1:3306` 连接 MySQL。使用 [application.yml](../../tian-ai-agent-app/src/main/resources/application.yml) 的 `agent.persistence.mysql` 配置数据库名和用户名，在后端根目录 `.env` 中设置 `MYSQL_PASSWORD`。
+Spring Boot 在 Windows 本机运行，MySQL 由 [Docker Compose](../docker/compose.yml) 管理。后端默认使用 `root` 连接 `127.0.0.1:13306` 上的 `tian_ai_agent`。在后端根目录 `.env` 设置 `MYSQL_PASSWORD`，再执行 `docker compose --env-file .env -f docs/docker/compose.yml up -d --wait mysql`。可通过 `MYSQL_PORT` 和 `MYSQL_DATABASE` 覆盖默认值。MySQL 数据保存在 `mysql_workspace_data` 卷中。
 
 ## 启用工作台 MySQL 持久化
 
 [`tian_ai_agent.sql`](tian_ai_agent.sql) 是完整的 MySQL 初始化脚本，包含会话、消息、个人模型配置、运行审计、用户画像和旧版摘要兼容表。可在选中目标库后手动执行整份脚本。
 
-先创建目标库，并让应用账号拥有该库的建表和读写权限。后端启动时会执行建表脚本，并尝试导入可读取的旧会话历史。MySQL 连接或鉴权失败时，启动会报错。IDEA 中的 `local` 活动配置额外启用 Milvus 长期记忆。
+容器首次初始化数据卷时会创建目标库并设置 `root` 密码。已有数据卷的密码需在 MySQL 内修改，再同步 `.env`。后端启动时会执行建表脚本，并尝试导入可读取的旧会话历史。MySQL 连接或鉴权失败时，启动会报错。IDEA 中的 `local` 活动配置额外启用 Milvus 长期记忆。
+
+后端在宿主机运行时，`MYSQL_ROOT_HOST` 使用 Docker 网关的具体 IP。可以用 `docker network inspect tian-ai-agent_default` 查看网关。已有数据卷需在 MySQL 中为该来源配置 `root` 登录权限。
+
+迁移已有实例时，停止向源库写入，用 `mysqldump` 导出 `tian_ai_agent`，恢复到容器中的空库，核对表和行数后再启动后端。迁移时保留后端数据目录中的 `model-settings/storage.key`，以继续读取已加密的配置。
 
 工作台的 MySQL 连接独立于文档知识库的 `spring.datasource`。
 
@@ -30,7 +34,7 @@ MySQL 和 Spring Boot 均在 Windows 本机运行，后端默认通过 `127.0.0.
 
 `agent_mcp_server` 按账号保存远程 Streamable HTTP 端点、启用状态和获准调用的工具定义。可选的 Bearer Token 使用存储密钥加密，页面只显示是否已保存。
 
-先将可信 MCP 服务的来源加入 `agent.mcp.allowed-origins` 并重启后端。例如来源填写 `https://tools.example.com`，页面端点填写 `https://tools.example.com/mcp`。在「MCP 设置」添加服务，发现工具，勾选并保存。启用的工具会加入该账号的通用 Agent 问答和工作流，并通过工具网关审计。
+先将可信 MCP 服务的来源加入 `agent.mcp.allowed-origins` 并重启后端。例如来源填写 `https://tools.example.com`，页面端点填写 `https://tools.example.com/mcp`。在「MCP 设置」导入服务，保存时会发现并注册工具。也可先预览并勾选所需工具。启用的工具会加入该账号的通用 Agent 问答和工作流，并通过工具网关审计。删除配置会撤销对应的工具。
 
 ## 运行审计
 
@@ -42,6 +46,6 @@ MySQL 和 Spring Boot 均在 Windows 本机运行，后端默认通过 `127.0.0.
 
 `agent_account_profile` 按账号保存已明确表达的非敏感背景和偏好。画像由完成的问答异步提取，删除单个会话会保留账号画像。
 
-设置 `agent.memory.long-term.enabled: true` 后，压缩摘要写入 `doc-mcp.milvus.memory-collection-name` 指定的集合。召回按账号、会话类型和知识库范围过滤。文档索引可以继续使用 H2，本功能使用独立的 Milvus 记忆集合。需要配置 Milvus 的 URI、数据库及适用的凭证。
+设置 `agent.memory.long-term.enabled: true` 后，压缩摘要写入 `doc-mcp.milvus.memory-collection-name` 指定的集合。召回按账号、会话类型和知识库范围过滤。文档索引可以继续使用 SQLite，本功能使用独立的 Milvus 记忆集合。需要配置 Milvus 的 URI、数据库及适用的凭证。
 
 `agent_long_term_memory` 用于读取同一 MySQL 库中的旧摘要。旧会话继续对话并压缩时，可将旧摘要合并进 Milvus；新摘要由 Milvus 保存和召回。

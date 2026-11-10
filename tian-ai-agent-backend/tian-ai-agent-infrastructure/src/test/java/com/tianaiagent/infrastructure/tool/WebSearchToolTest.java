@@ -35,10 +35,15 @@ class WebSearchToolTest
         server.start();
         try {
             String endpoint = "http://127.0.0.1:" + server.getAddress().getPort() + "/search";
-            String result = new WebSearchTool("'search-test-key'", endpoint).searchWeb("中文搜索");
+            var key = new AtomicReference<>("'search-test-key'");
+            var tool = new WebSearchTool(key::get, endpoint);
+            String result = tool.searchWeb("中文搜索");
             assertThat(authorization.get()).isEqualTo("Bearer search-test-key");
             assertThat(query.get()).contains("engine=baidu", "q=中文搜索").doesNotContain("api_key", "search-test-key");
             assertThat(result).contains("SEARCH_API_HTTP_401", "\"ok\":false").doesNotContain("search-test-key");
+            key.set("next-account-key");
+            tool.searchWeb("中文搜索");
+            assertThat(authorization.get()).isEqualTo("Bearer next-account-key");
         } finally {
             server.stop(0);
         }

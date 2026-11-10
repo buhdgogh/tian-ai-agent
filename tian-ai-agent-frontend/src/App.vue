@@ -5,18 +5,25 @@
         <span class="brand-mark"><WorkspaceIcon name="brand" /></span>
         <span>Tian <small>知识工作台</small></span>
       </RouterLink>
-      <nav class="workspace-nav" aria-label="工作台导航">
+      <nav v-if="desktopReady" class="workspace-nav" aria-label="工作台导航">
         <RouterLink v-for="item in navigation" :key="item.to" :to="item.to">
           <WorkspaceIcon :name="item.icon" /> {{ item.label }}
         </RouterLink>
       </nav>
       <div class="access">
-        <RouterLink class="ui-button access-button" to="/mcp-settings">MCP 设置</RouterLink>
-        <RouterLink class="ui-button access-button" to="/model-settings">模型设置</RouterLink>
-        <button v-if="!editingToken" class="ui-button access-button" type="button" @click="editingToken = true">
+        <template v-if="desktopReady">
+          <RouterLink class="ui-button access-button" to="/mcp-settings">MCP 设置</RouterLink>
+          <RouterLink class="ui-button access-button" to="/agent-presets">Skills / Prompt</RouterLink>
+          <RouterLink class="ui-button access-button" to="/model-settings">模型设置</RouterLink>
+          <RouterLink class="ui-button access-button" to="/tool-settings">配置中心</RouterLink>
+        </template>
+        <button v-if="desktopClient && desktopReady" class="ui-button access-button" type="button" @click="editingDesktop = true">
+          <WorkspaceIcon name="key" /> 访问配置
+        </button>
+        <button v-else-if="!desktopClient && !editingToken" class="ui-button access-button" type="button" @click="editingToken = true">
           <WorkspaceIcon name="key" /> {{ hasToken ? '访问已配置' : '设置访问令牌' }}
         </button>
-        <form v-else class="access-form ui-panel" @submit.prevent="saveToken">
+        <form v-else-if="!desktopClient" class="access-form ui-panel" @submit.prevent="saveToken">
           <label for="access-token">访问令牌</label>
           <input id="access-token" v-model="tokenInput" class="ui-field" type="password" placeholder="输入后端访问令牌" autocomplete="off" />
           <div>
@@ -27,7 +34,9 @@
       </div>
     </header>
 
-    <div class="app-layout" :class="{ 'chat-layout': showSidebar }">
+    <DesktopAccess v-if="editingDesktop" :required="!desktopReady"
+      @cancel="editingDesktop = false" @connected="onDesktopConnected" />
+    <div v-if="desktopReady" class="app-layout" :class="{ 'chat-layout': showSidebar }">
       <AppSidebar v-if="showSidebar" :current-chat-id="currentChatId" :medical="isMedicalSpace" :history-list="historyList"
         @new-chat="handleNewChat" @select-chat="handleSelectChat" @delete-chat="handleDeleteChat" @clear-chat="handleClearChat" />
       <main class="main-content">
@@ -46,19 +55,21 @@
           @chat-activity="promoteChat" />
       </main>
     </div>
-    <MedicalBoundary v-if="showSpaceSelector && isMedicalSpace" />
+    <MedicalBoundary v-if="desktopReady && showSpaceSelector && isMedicalSpace" />
   </div>
 </template>
 
 <script setup>
 import { computed, ref, watch, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import WorkspaceIcon from './components/WorkspaceIcon.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import MedicalBoundary from './components/MedicalBoundary.vue'
-import { getSessions, deleteSession, getKnowledgeSpaces, getModelProviders, getApiToken, setApiToken } from './api'
+import DesktopAccess from './components/DesktopAccess.vue'
+import { getSessions, deleteSession, getKnowledgeSpaces, getModelProviders, getApiToken, setApiToken, desktopClient, savedDesktopApi } from './api'
 
 const route = useRoute()
+const router = useRouter()
 const navigation = [
   { to: '/knowledge-base', icon: 'documents', label: '知识库导入' },
   { to: '/agent', icon: 'agent', label: 'Agent 问答' },
@@ -89,6 +100,12 @@ const removeSpace = id => {
   if (spaceId.value === id) spaceId.value = ''
 }
 const hasToken = Boolean(getApiToken())
+const desktopReady = !desktopClient || Boolean(savedDesktopApi && hasToken)
+const editingDesktop = ref(!desktopReady)
+function onDesktopConnected({ needsModel }) {
+  if (needsModel) window.history.replaceState(null, '', router.resolve('/model-settings').href)
+  window.location.reload()
+}
 const editingToken = ref(false)
 const tokenInput = ref('')
 const saveToken = () => {
@@ -108,7 +125,7 @@ const loadSpaces = async () => {
 
 // 加载会话列表
 const loadHistory = async () => {
-  if (!showSidebar.value) return
+  if (!desktopReady || !showSidebar.value) return
   const requestId = ++historyRequest
   const type = aiType
   const selected = spaceId.value
@@ -154,7 +171,7 @@ watch(showSidebar, async (active, _, onCleanup) => {
   try {
     const { data } = await getModelProviders()
     if (cancelled) return
-    modelProviders.value = data.providers.filter(provider => provider.enabled && provider.hasApiKey)
+    modelProviders.value = data.providers.filter(provider => provider.enabled && provider.hasApiKey && provider.protocol !== 'OPENAI_EMBEDDING')
       .sort((a, b) => a.priority - b.priority)
     if (!modelProviders.value.some(provider => provider.id === modelProviderId.value)) modelProviderId.value = ''
   } catch {

@@ -96,6 +96,11 @@ public class AgentWorkflowService {
 
     public TaskRecord submit(String objective, String chatId, String ownerId, boolean reviewEnabled, String spaceId,
                              boolean medical) {
+        return submit(objective, chatId, ownerId, reviewEnabled, spaceId, medical, "");
+    }
+
+    public TaskRecord submit(String objective, String chatId, String ownerId, boolean reviewEnabled, String spaceId,
+                             boolean medical, String skillInstructions) {
         if (objective == null || objective.isBlank()) {
             throw new IllegalArgumentException("工作流目标不能为空");
         }
@@ -110,7 +115,7 @@ public class AgentWorkflowService {
         var writeMessages = chatId == null || chatId.isBlank() ? null : agentService.messageWriter(conversationId);
         if (writeMessages != null) writeMessages.accept(List.of(new UserMessage(objective)));
         return taskCenter.submit(TaskType.AGENT_WORKFLOW, ownerId, input, context -> {
-            var result = executeWorkflow(context, goal, chatId, reviewEnabled, spaceId, medical);
+            var result = executeWorkflow(context, goal, chatId, reviewEnabled, spaceId, medical, skillInstructions);
             if (writeMessages != null && result.executionResult() != null && !result.executionResult().isBlank()) {
                 context.update(99, "保存会话", "正在保存工作流的最终回答");
                 writeMessages.accept(List.of(new AssistantMessage(result.executionResult())));
@@ -120,7 +125,8 @@ public class AgentWorkflowService {
     }
 
     private WorkflowResult executeWorkflow(AsyncTaskCenter.TaskContext context, String objective, String chatId,
-                                           boolean reviewEnabled, String spaceId, boolean medical) throws Exception {
+                                           boolean reviewEnabled, String spaceId, boolean medical,
+                                           String skillInstructions) throws Exception {
         if (medical) {
             context.update(5, "确定性安全分诊", "正在 LLM 调用前检查急症红旗");
             var risk = AgentRunContext.stage("安全检查", () -> safetyService.assess(objective));
@@ -129,6 +135,7 @@ public class AgentWorkflowService {
         var route = AgentRunContext.stage("意图识别", () -> intentRouter.route(objective, List.of(), medical));
         String routeHint = intentRouter.routingHint(route) + agentService.memoryContext(chatId, objective);
         boolean requiresMedicalReview = medical && requiresProfessionalReview(objective);
+        String modelObjective = AgentPresetService.withSkillInstructions(objective, skillInstructions);
 
         String feedback = "";
         WorkflowPlan plan = null;
@@ -139,11 +146,11 @@ public class AgentWorkflowService {
         for (int iteration = 1; iteration <= MAX_ITERATIONS; iteration++) {
             context.update(iteration == 1 ? 10 : 55, "LLM 动态规划",
                     iteration == 1 ? "Planner 正在拆解用户目标" : "Planner 正在根据审查意见重规划");
-            plan = createPlan(objective, routeHint, feedback, medical);
-            executions = executePlan(context, objective, plan, iteration, spaceId, medical);
+            plan = createPlan(objective, modelObjective, routeHint, feedback, medical);
+            executions = executePlan(context, objective, plan, iteration, spaceId, medical, skillInstructions);
 
             context.update(iteration == 1 ? 65 : 82, "结果整合", "正在整合动态步骤的执行结果");
-            result = synthesize(objective, plan, executions);
+            result = synthesize(modelObjective, plan, executions);
 
             if (!reviewEnabled) {
                 review = new ReviewResult(true, requiresMedicalReview, requiresMedicalReview ? "DOCTOR_OR_PHARMACIST" : "NONE",
@@ -153,15 +160,15 @@ public class AgentWorkflowService {
 
             context.update(iteration == 1 ? 75 : 90, "LLM 独立复核",
                     "Reviewer 正在校验目标覆盖、证据、引用、不确定性和安全边界");
-            review = review(objective, plan, executions, result, medical, requiresMedicalReview);
+            review = review(modelObjective, plan, executions, result, medical, requiresMedicalReview);
             if (review.passed()) {
                 return new WorkflowResult(markCompleted(plan), executions, result, review, iteration);
             }
 
             if (iteration < MAX_ITERATIONS && !review.replanRequired()) {
                 context.update(80, "按审查意见修订", "Executor 正在修订最终结果");
-                result = revise(objective, result, review);
-                ReviewResult revisedReview = review(objective, plan, executions, result, medical, requiresMedicalReview);
+                result = revise(modelObjective, result, review);
+                ReviewResult revisedReview = review(modelObjective, plan, executions, result, medical, requiresMedicalReview);
                 if (revisedReview.passed()) {
                     return new WorkflowResult(markCompleted(plan), executions, result, revisedReview, iteration);
                 }
@@ -173,8 +180,8 @@ public class AgentWorkflowService {
                 enforceHumanReview(review, requiresMedicalReview), MAX_ITERATIONS);
     }
 
-    private WorkflowPlan createPlan(String objective, String routeHint, String feedback, boolean medical) {
-        String prompt = routeHint + "\n用户目标：\n" + objective;
+    private WorkflowPlan createPlan(String objective, String modelObjective, String routeHint, String feedback, boolean medical) {
+        String prompt = routeHint + "\n用户目标：\n" + modelObjective;
         if (!feedback.isBlank()) prompt += "\n\n上一轮执行与审查反馈：\n" + clip(feedback);
         String plannerInput = prompt;
         PlannerOutput output = AgentRunContext.stage("Planner", () -> workflowChatClient.prompt().system(PLANNER_PROMPT + (medical ? MEDICAL_PLANNER_RULES : ""))
@@ -183,7 +190,8 @@ public class AgentWorkflowService {
     }
 
     private List<StepExecution> executePlan(AsyncTaskCenter.TaskContext context, String objective,
-                                            WorkflowPlan plan, int iteration, String spaceId, boolean medical) throws Exception {
+                                            WorkflowPlan plan, int iteration, String spaceId, boolean medical,
+                                            String skillInstructions) throws Exception {
         Map<String, WorkflowStep> pending = new LinkedHashMap<>();
         plan.steps().forEach(step -> pending.put(step.id(), step));
         Map<String, StepExecution> completed = new LinkedHashMap<>();
@@ -206,7 +214,7 @@ public class AgentWorkflowService {
             Map<String, StepExecution> completedSnapshot = Map.copyOf(completed);
             List<Future<StepExecution>> futures = ready.stream()
                     .map(step -> workflowStepExecutor.submit(
-                            () -> executeStep(objective, step, completedSnapshot, spaceId, medical)))
+                            () -> executeStep(objective, step, completedSnapshot, spaceId, medical, skillInstructions)))
                     .toList();
             List<StepExecution> batchResults;
             try {
@@ -235,7 +243,8 @@ public class AgentWorkflowService {
     }
 
     private StepExecution executeStep(String objective, WorkflowStep step,
-                                      Map<String, StepExecution> completed, String spaceId, boolean medical) {
+                                      Map<String, StepExecution> completed, String spaceId, boolean medical,
+                                      String skillInstructions) {
         List<StepExecution> dependencyResults = step.dependsOn().stream()
                 .map(completed::get).filter(java.util.Objects::nonNull)
                 .sorted(Comparator.comparingInt(StepExecution::order)).toList();
@@ -248,7 +257,9 @@ public class AgentWorkflowService {
                 依赖步骤结果：%s
                 """.formatted(objective, step.order(), step.id(), step.role(), step.description(),
                 step.successCriteria(), clip(asJson(dependencyResults)));
-        String stepResult = AgentRunContext.stage("Executor " + step.order(), () -> agentService.executeTask(prompt, spaceId, medical));
+        String stepResult = AgentRunContext.stage("Executor " + step.order(), () -> skillInstructions.isEmpty()
+                ? agentService.executeTask(prompt, spaceId, medical)
+                : agentService.executeTask(prompt, spaceId, medical, skillInstructions));
         if (stepResult == null || stepResult.isBlank() || stepResult.startsWith("执行错误")) {
             throw new IllegalStateException("动态计划第 " + step.order() + " 步执行失败: " + stepResult);
         }

@@ -7,32 +7,30 @@ import org.junit.jupiter.api.Test;
 import java.net.http.HttpClient;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
 
 class EmbeddedMcpConfigurationTest {
     private final EmbeddedMcpConfiguration configuration = new EmbeddedMcpConfiguration();
 
     @Test
-    void usesMineruTokenFromDotEnvWhenTheDirectPropertyIsMissing() {
+    void supportsAnExplicitAccountTokenAndRespectsTheFeatureFlag() {
         var properties = new DocMcpProperties();
-        var client = configuration.mineruClient(properties, HttpClient.newHttpClient(),
-                new ObjectMapper(), "test-dotenv-token");
+        var client = configuration.mineruClient(properties, mock(HttpClient.class), new ObjectMapper())
+                .withToken("account-mineru-token");
 
         assertThat(client.isAvailable()).isTrue();
-        assertThat(properties.getMineru().getToken()).isEqualTo("test-dotenv-token");
+        assertThat(properties.getMineru().getToken()).isEmpty();
         properties.getMineru().setEnabled(false);
         assertThat(client.isAvailable()).isFalse();
     }
 
     @Test
-    void givesTheDirectPropertyPriorityAndAllowsNoToken() {
+    void permitsAnAccountWithoutTokenEvenWhenTheServerHasOne() {
         var properties = new DocMcpProperties();
-        var http = HttpClient.newHttpClient();
-        var mapper = new ObjectMapper();
-        assertThat(configuration.mineruClient(properties, http, mapper, "").isAvailable()).isFalse();
-
         properties.getMineru().setToken("test-direct-token");
-        var client = configuration.mineruClient(properties, http, mapper, "test-dotenv-token");
-        assertThat(client.isAvailable()).isTrue();
-        assertThat(properties.getMineru().getToken()).isEqualTo("test-direct-token");
+        var client = configuration.mineruClient(properties, mock(HttpClient.class), new ObjectMapper());
+        assertThat(client.withToken("").isAvailable()).isFalse();
+        assertThat(client.withToken("account-mineru-token").isAvailable()).isTrue();
+        assertThat(client.withToken("").isAvailable()).isFalse();
     }
 }

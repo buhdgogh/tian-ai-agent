@@ -20,7 +20,9 @@ public class KnowledgeAnswerService implements KnowledgeIndex {
     }
 
     @Override
-    public KnowledgeSpace createSpace(String name, boolean medical) { return indexService.createSpace(name, medical); }
+    public KnowledgeSpace createSpace(String name, boolean medical, String ownerId, String embeddingProviderId) {
+        return indexService.createSpace(name, medical, ownerId, embeddingProviderId);
+    }
 
     @Override
     public List<KnowledgeSpace> listSpaces() { return indexService.listSpaces(); }

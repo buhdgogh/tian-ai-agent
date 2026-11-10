@@ -7,6 +7,7 @@ import com.tianaiagent.infrastructure.dao.mysql.LegacyMemoryMapper;
 import com.tianaiagent.infrastructure.dao.mysql.McpServerMapper;
 import com.tianaiagent.infrastructure.dao.mysql.ModelProviderMapper;
 import com.tianaiagent.infrastructure.dao.mysql.UserProfileMapper;
+import com.tianaiagent.infrastructure.dao.mysql.ToolCredentialMapper;
 import com.zaxxer.hikari.HikariConfig;
 import com.zaxxer.hikari.HikariDataSource;
 import org.mybatis.spring.SqlSessionTemplate;
@@ -39,7 +40,8 @@ public class MysqlWorkspaceDatabase implements AutoCloseable {
         try {
             new ResourceDatabasePopulator(schema).execute(dataSource);
             sessions = MybatisSessions.create(dataSource, ConversationMapper.class, ModelProviderMapper.class,
-                    UserProfileMapper.class, LegacyMemoryMapper.class, AgentRunMapper.class, McpServerMapper.class);
+                    UserProfileMapper.class, LegacyMemoryMapper.class, AgentRunMapper.class, McpServerMapper.class,
+                    ToolCredentialMapper.class);
         } catch (RuntimeException | Error e) {
             dataSource.close();
             throw e;

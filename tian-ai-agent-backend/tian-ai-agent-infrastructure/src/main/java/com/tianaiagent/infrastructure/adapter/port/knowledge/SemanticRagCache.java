@@ -1,9 +1,11 @@
 package com.tianaiagent.infrastructure.adapter.port.knowledge;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tianaiagent.domain.agent.model.entity.AgentRun;
+import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.knowledge.adapter.port.KnowledgeAnswerCache;
 import com.tianaiagent.domain.knowledge.adapter.port.KnowledgeIndex;
-
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tianaiagent.domain.medical.service.MedicalSafetyService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.ai.embedding.EmbeddingModel;
@@ -15,7 +17,9 @@ import org.springframework.stereotype.Service;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -49,27 +53,69 @@ public class SemanticRagCache implements KnowledgeAnswerCache {
         this.maxEntries=Math.max(10,maxEntries); this.ttl=Duration.ofHours(Math.max(1,ttlHours));
     }
 
-    public Optional<Hit> get(String spaceId, String question,int topK,String version){
-        if(!cacheable(question))return Optional.empty(); String normalized=normalize(question);
-        try{
-            String exact=redis.opsForValue().get(exactKey(spaceId,normalized,topK,version));
-            if(exact!=null)return Optional.of(new Hit(mapper.readValue(exact, KnowledgeIndex.Answer.class), Mode.EXACT));
-            if (embeddingModel.isEmpty()) return Optional.empty();
-            float[] vector=embeddingModel.get().embed(normalized); Set<String> members=redis.opsForZSet().reverseRange(SEMANTIC_PREFIX + spaceId,0,maxEntries-1);
-            if(members==null)return Optional.empty(); CacheEntry best=null; double bestScore=-1;
-            for(String member:members){CacheEntry e=mapper.readValue(member,CacheEntry.class);
-                if(e.topK()!=topK||!version.equals(e.knowledgeVersion())||!constraints(question).equals(e.constraints())||!intent(question).equals(e.intent()))continue;
-                if(jaccard(tokens(normalized),tokens(e.normalizedQuestion()))<lexicalThreshold)continue;
-                double score=cosine(vector,e.embedding());if(score>=similarityThreshold&&score>bestScore){best=e;bestScore=score;}}
-            return best==null?Optional.empty():Optional.of(new Hit(mapper.readValue(best.resultJson(), KnowledgeIndex.Answer.class), Mode.SEMANTIC));
-        }catch(Exception e){log.warn("RAG语义缓存读取失败，降级为完整检索: {}",e.getMessage());return Optional.empty();}
+    @Override
+    public Optional<Hit> get(String spaceId, String question, int topK, String version, boolean semantic) {
+        Instant startedAt = Instant.now();
+        long startedNanos = System.nanoTime();
+        if (!cacheable(question)) {
+            recordLookup(startedAt, startedNanos, "SKIPPED", enabled ? "INELIGIBLE" : "DISABLED");
+            return Optional.empty();
+        }
+        try {
+            Optional<Hit> result = lookup(spaceId, question, topK, version, semantic);
+            recordLookup(startedAt, startedNanos, result.isPresent() ? "HIT" : "MISS",
+                    result.map(hit -> hit.mode().name()).orElse(null));
+            return result;
+        } catch (Exception e) {
+            recordLookup(startedAt, startedNanos, "FAILED", "CACHE_READ_FAILED");
+            log.warn("RAG语义缓存读取失败，降级为完整检索: {}", e.getMessage());
+            return Optional.empty();
+        }
     }
 
-    public void put(String spaceId, String question,int topK,String version,KnowledgeIndex.Answer result){
+    private Optional<Hit> lookup(String spaceId, String question, int topK, String version, boolean semantic)
+            throws JsonProcessingException {
+        String normalized = normalize(question);
+        String exact = redis.opsForValue().get(exactKey(spaceId, normalized, topK, version));
+        if (exact != null) {
+            return Optional.of(new Hit(mapper.readValue(exact, KnowledgeIndex.Answer.class), Mode.EXACT));
+        }
+        if (!semantic || embeddingModel.isEmpty()) return Optional.empty();
+
+        float[] vector = embeddingModel.get().embed(normalized);
+        Set<String> members = redis.opsForZSet().reverseRange(SEMANTIC_PREFIX + spaceId, 0, maxEntries - 1);
+        if (members == null) return Optional.empty();
+        CacheEntry best = null;
+        double bestScore = -1;
+        for (String member : members) {
+            CacheEntry candidate = mapper.readValue(member, CacheEntry.class);
+            if (candidate.topK() != topK || !version.equals(candidate.knowledgeVersion())
+                    || !constraints(question).equals(candidate.constraints())
+                    || !intent(question).equals(candidate.intent())) continue;
+            if (jaccard(tokens(normalized), tokens(candidate.normalizedQuestion())) < lexicalThreshold) continue;
+            double score = cosine(vector, candidate.embedding());
+            if (score >= similarityThreshold && score > bestScore) {
+                best = candidate;
+                bestScore = score;
+            }
+        }
+        return best == null ? Optional.empty()
+                : Optional.of(new Hit(mapper.readValue(best.resultJson(), KnowledgeIndex.Answer.class), Mode.SEMANTIC));
+    }
+
+    private static void recordLookup(Instant startedAt, long startedNanos, String status, String reason) {
+        var run = AgentRunContext.current();
+        if (run == null) return;
+        run.event(new AgentRun.Event("CACHE", "RAG 答案缓存", null, null, status, startedAt,
+                TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos), null, null, null, reason));
+    }
+
+    @Override
+    public void put(String spaceId, String question,int topK,String version,KnowledgeIndex.Answer result,boolean semantic){
         if(!cacheable(question)||result==null)return; String normalized=normalize(question);
         try{String json=mapper.writeValueAsString(result);Duration jitter=ttl.plusSeconds(Math.floorMod(normalized.hashCode(),1800));
             redis.opsForValue().set(exactKey(spaceId,normalized,topK,version),json,jitter);
-            if (embeddingModel.isEmpty()) return;
+            if (!semantic || embeddingModel.isEmpty()) return;
             CacheEntry entry=new CacheEntry(normalized,intent(question),constraints(question),topK,version,embeddingModel.get().embed(normalized),json);
             String semanticKey = SEMANTIC_PREFIX + spaceId;
             redis.opsForZSet().add(semanticKey,mapper.writeValueAsString(entry),System.currentTimeMillis());

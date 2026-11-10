@@ -8,6 +8,7 @@ import com.tianaiagent.domain.knowledge.adapter.repository.ParseTaskRepository;
 import com.tianaiagent.domain.knowledge.adapter.repository.KnowledgeRepository;
 import com.tianaiagent.domain.knowledge.model.entity.ChunkRecord;
 import com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace;
+import com.tianaiagent.domain.knowledge.model.valobj.EmbeddingBinding;
 import jakarta.annotation.PostConstruct;
 import com.tianaiagent.infrastructure.dao.knowledge.KnowledgeMapper;
 import com.tianaiagent.infrastructure.dao.po.KnowledgeRows;
@@ -67,7 +68,12 @@ public class MybatisKnowledgeRepository implements KnowledgeRepository, ParseTas
     }
 
     public void addSpace(KnowledgeSpace space) {
-        knowledge.insertSpace(space.id(), space.name(), space.medical());
+        try {
+            String binding = space.embedding() == null ? null : mapper.writeValueAsString(space.embedding());
+            knowledge.insertSpace(space.id(), space.name(), space.medical(), binding);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("知识库嵌入配置序列化失败", e);
+        }
     }
 
     public Optional<KnowledgeSpace> findSpace(String spaceId) {
@@ -79,7 +85,13 @@ public class MybatisKnowledgeRepository implements KnowledgeRepository, ParseTas
     }
 
     private KnowledgeSpace mapSpace(KnowledgeRows.Space row) {
-        return new KnowledgeSpace(row.spaceId(), row.name(), row.medical(), row.deleting());
+        try {
+            EmbeddingBinding binding = row.embeddingBinding() == null ? null
+                    : mapper.readValue(row.embeddingBinding(), EmbeddingBinding.class);
+            return new KnowledgeSpace(row.spaceId(), row.name(), row.medical(), row.deleting(), binding);
+        } catch (JsonProcessingException e) {
+            throw new IllegalStateException("知识库嵌入配置数据损坏", e);
+        }
     }
 
     @Override

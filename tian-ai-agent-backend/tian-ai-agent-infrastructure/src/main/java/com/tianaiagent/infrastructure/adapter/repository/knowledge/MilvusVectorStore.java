@@ -64,6 +64,7 @@ public class MilvusVectorStore implements VectorStore {
     private final DocMcpProperties properties;
     private final ObjectMapper mapper;
     private final Set<String> loadedPartitions = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final Set<String> loadedCollections = new HashSet<>();
     private MilvusClientV2 client;
 
     public MilvusVectorStore(DocMcpProperties properties, ObjectMapper mapper) {
@@ -80,15 +81,17 @@ public class MilvusVectorStore implements VectorStore {
         var builder = ConnectConfig.builder().uri(config.getUri());
         if (config.getToken() != null && !config.getToken().isBlank()) builder.token(config.getToken());
         client = new MilvusClientV2(builder.build());
-        ensureCollection();
+        ensureCollection(collection(KnowledgeSpace.MEDICAL), dimensions(KnowledgeSpace.MEDICAL), true);
         log.info("Milvus向量库已连接: database={}, collection={}, dimensions={}",
-                database(), collection(), dimensions());
+                database(), collection(KnowledgeSpace.MEDICAL), dimensions(KnowledgeSpace.MEDICAL));
     }
 
-    private void ensureCollection() {
+    private synchronized boolean ensureCollection(String collection, int dimensions, boolean create) {
+        if (loadedCollections.contains(collection)) return true;
         boolean exists = client.hasCollection(HasCollectionReq.builder()
-                .databaseName(database()).collectionName(collection()).build());
+                .databaseName(database()).collectionName(collection).build());
         if (!exists) {
+            if (!create) return false;
             CreateCollectionReq.CollectionSchema schema = client.createSchema();
             schema.addField(varchar(NODE_ID, 64, true));
             schema.addField(varchar(DOC_ID, 300, false));
@@ -101,7 +104,7 @@ public class MilvusVectorStore implements VectorStore {
             schema.addField(varchar(CHUNK_TEXT, 65535, false));
             schema.addField(varchar(METADATA_JSON, 65535, false));
             schema.addField(AddFieldReq.builder().fieldName(VECTOR).dataType(DataType.FloatVector)
-                    .dimension(dimensions()).build());
+                    .dimension(dimensions).build());
 
             IndexParam vectorIndex = IndexParam.builder()
                     .fieldName(VECTOR)
@@ -110,7 +113,7 @@ public class MilvusVectorStore implements VectorStore {
                     .build();
             client.createCollection(CreateCollectionReq.builder()
                     .databaseName(database())
-                    .collectionName(collection())
+                    .collectionName(collection)
                     .description("Tian AI Agent knowledge-base leaf chunks")
                     .collectionSchema(schema)
                     .indexParams(List.of(vectorIndex))
@@ -118,7 +121,9 @@ public class MilvusVectorStore implements VectorStore {
                     .build());
         }
         client.loadCollection(LoadCollectionReq.builder()
-                .databaseName(database()).collectionName(collection()).build());
+                .databaseName(database()).collectionName(collection).build());
+        loadedCollections.add(collection);
+        return true;
     }
 
     private AddFieldReq varchar(String name, int maxLength, boolean primary) {
@@ -129,15 +134,16 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     @Override
-    public void replaceDocument(String spaceId, List<ChunkRecord> previous, List<ChunkRecord> current) {
-        String partition = partition(spaceId, true);
+    public void replaceDocument(KnowledgeSpace space, List<ChunkRecord> previous, List<ChunkRecord> current) {
+        String collection = collection(space);
+        String partition = partition(space, collection, true);
         List<ChunkRecord> leaves = current.stream().filter(ChunkRecord::leaf).toList();
         int batchSize = Math.max(1, properties.getMilvus().getBatchSize());
         for (int from = 0; from < leaves.size(); from += batchSize) {
             List<JsonObject> rows = leaves.subList(from, Math.min(leaves.size(), from + batchSize))
                     .stream().map(this::toRow).toList();
             client.upsert(UpsertReq.builder()
-                    .databaseName(database()).collectionName(collection()).partitionName(partition).data(rows).build());
+                    .databaseName(database()).collectionName(collection).partitionName(partition).data(rows).build());
         }
 
         Set<String> currentIds = new HashSet<>();
@@ -147,17 +153,18 @@ public class MilvusVectorStore implements VectorStore {
                 .map(id -> (Object) id).toList();
         if (!staleIds.isEmpty()) {
             client.delete(DeleteReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionName(partition).ids(staleIds).build());
+                    .collectionName(collection).partitionName(partition).ids(staleIds).build());
         }
     }
 
     @Override
-    public List<VectorCandidate> search(String spaceId, float[] queryVector, int limit) {
-        String partition = partition(spaceId, false);
+    public List<VectorCandidate> search(KnowledgeSpace space, float[] queryVector, int limit) {
+        String collection = collection(space);
+        String partition = partition(space, collection, false);
         if (partition == null) return List.of();
         SearchResp response = client.search(SearchReq.builder()
                 .databaseName(database())
-                .collectionName(collection())
+                .collectionName(collection)
                 .partitionNames(List.of(partition))
                 .annsField(VECTOR)
                 .data(List.of(new FloatVec(queryVector)))
@@ -176,45 +183,50 @@ public class MilvusVectorStore implements VectorStore {
     }
 
     @Override
-    public void deleteDocument(String spaceId, String documentId) {
-        String partition = partition(spaceId, false);
+    public void deleteDocument(KnowledgeSpace space, String documentId) {
+        String collection = collection(space);
+        String partition = partition(space, collection, false);
         if (partition == null) return;
-        client.delete(DeleteReq.builder().databaseName(database()).collectionName(collection())
+        client.delete(DeleteReq.builder().databaseName(database()).collectionName(collection)
                 .partitionName(partition)
                 .filter(DOC_ID + " == " + jsonString(documentId)).build());
     }
 
     @Override
-    public void deleteSpace(String spaceId) {
-        if (KnowledgeSpace.MEDICAL_ID.equals(KnowledgeSpace.requireId(spaceId))) {
+    public void deleteSpace(KnowledgeSpace space) {
+        if (KnowledgeSpace.MEDICAL_ID.equals(KnowledgeSpace.requireId(space.id()))) {
             throw new IllegalArgumentException("不能删除默认向量分区");
         }
-        String name = "space_" + spaceId;
+        String collection = collection(space);
+        if (!ensureCollection(collection, dimensions(space), false)) return;
+        String name = "space_" + space.id();
         synchronized (loadedPartitions) {
             loadedPartitions.remove(name);
             if (!client.hasPartition(HasPartitionReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionName(name).build())) return;
+                    .collectionName(collection).partitionName(name).build())) return;
             client.releasePartitions(ReleasePartitionsReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionNames(List.of(name)).build());
+                    .collectionName(collection).partitionNames(List.of(name)).build());
             client.dropPartition(DropPartitionReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionName(name).build());
+                    .collectionName(collection).partitionName(name).build());
         }
     }
 
-    private String partition(String spaceId, boolean create) {
+    private String partition(KnowledgeSpace space, String collection, boolean create) {
+        String spaceId = space.id();
         if (KnowledgeSpace.MEDICAL_ID.equals(KnowledgeSpace.requireId(spaceId))) return "_default";
         String name = "space_" + spaceId;
         if (loadedPartitions.contains(name)) return name;
+        if (!ensureCollection(collection, dimensions(space), create)) return null;
         synchronized (loadedPartitions) {
             if (loadedPartitions.contains(name)) return name;
             if (!client.hasPartition(HasPartitionReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionName(name).build())) {
+                    .collectionName(collection).partitionName(name).build())) {
                 if (!create) return null;
                 client.createPartition(CreatePartitionReq.builder().databaseName(database())
-                        .collectionName(collection()).partitionName(name).build());
+                        .collectionName(collection).partitionName(name).build());
             }
             client.loadPartitions(LoadPartitionsReq.builder().databaseName(database())
-                    .collectionName(collection()).partitionNames(List.of(name)).build());
+                    .collectionName(collection).partitionNames(List.of(name)).build());
             loadedPartitions.add(name);
         }
         return name;
@@ -271,9 +283,14 @@ public class MilvusVectorStore implements VectorStore {
 
     private static String safe(String value) { return value == null ? "" : value; }
     private static String jsonString(String value) { return new com.google.gson.Gson().toJson(value); }
-    private int dimensions() { return Math.max(64, properties.getEmbedding().getDimensions()); }
+    private int dimensions(KnowledgeSpace space) {
+        return space.embedding() == null ? Math.max(64, properties.getEmbedding().getDimensions()) : space.embedding().dimensions();
+    }
     private String database() { return properties.getMilvus().getDatabaseName(); }
-    private String collection() { return properties.getMilvus().getCollectionName(); }
+    private String collection(KnowledgeSpace space) {
+        String base = properties.getMilvus().getCollectionName();
+        return space.embedding() == null ? base : base + "_embedding_" + dimensions(space);
+    }
 
     @Override
     public boolean external() { return true; }
@@ -282,12 +299,12 @@ public class MilvusVectorStore implements VectorStore {
     public String name() { return "milvus"; }
 
     @Override
-    public Map<String, Object> status(String spaceId) {
+    public Map<String, Object> status(KnowledgeSpace space) {
         Map<String, Object> value = new LinkedHashMap<>();
         value.put("name", name());
         value.put("database", database());
-        value.put("collection", collection());
-        value.put("dimensions", dimensions());
+        value.put("collection", collection(space));
+        value.put("dimensions", dimensions(space));
         return value;
     }
 

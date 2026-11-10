@@ -10,7 +10,10 @@ import org.apache.ibatis.annotations.Update;
 import java.util.List;
 
 public interface KnowledgeMapper {
-    @Insert("MERGE INTO parse_tasks(task_id,payload,updated_at) KEY(task_id) VALUES (#{taskId},#{payload},#{updatedAt})")
+    @Insert("""
+            INSERT INTO parse_tasks(task_id,payload,updated_at) VALUES (#{taskId},#{payload},#{updatedAt})
+            ON CONFLICT(task_id) DO UPDATE SET payload=excluded.payload, updated_at=excluded.updated_at
+            """)
     int saveTask(@Param("taskId") String taskId, @Param("payload") String payload, @Param("updatedAt") String updatedAt);
 
     @Select("SELECT payload FROM parse_tasks WHERE task_id=#{taskId}")
@@ -19,16 +22,23 @@ public interface KnowledgeMapper {
     @Select("SELECT payload FROM parse_tasks WHERE payload LIKE #{pattern}")
     List<String> tasksMatching(@Param("pattern") String pattern);
 
-    @Insert("MERGE INTO knowledge_spaces(space_id,name,medical) KEY(space_id) VALUES (#{spaceId},#{name},#{medical})")
+    @Insert("""
+            INSERT INTO knowledge_spaces(space_id,name,medical) VALUES (#{spaceId},#{name},#{medical})
+            ON CONFLICT(space_id) DO UPDATE SET name=excluded.name, medical=excluded.medical
+            """)
     int seedSpace(@Param("spaceId") String spaceId, @Param("name") String name, @Param("medical") boolean medical);
 
-    @Insert("INSERT INTO knowledge_spaces(space_id,name,medical) VALUES (#{spaceId},#{name},#{medical})")
-    int insertSpace(@Param("spaceId") String spaceId, @Param("name") String name, @Param("medical") boolean medical);
+    @Insert("""
+            INSERT INTO knowledge_spaces(space_id,name,medical,embedding_binding)
+            VALUES (#{spaceId},#{name},#{medical},#{embeddingBinding,jdbcType=VARCHAR})
+            """)
+    int insertSpace(@Param("spaceId") String spaceId, @Param("name") String name, @Param("medical") boolean medical,
+                    @Param("embeddingBinding") String embeddingBinding);
 
-    @Select("SELECT space_id,name,medical,deleting FROM knowledge_spaces WHERE space_id=#{spaceId}")
+    @Select("SELECT space_id,name,medical,deleting,embedding_binding FROM knowledge_spaces WHERE space_id=#{spaceId}")
     KnowledgeRows.Space space(@Param("spaceId") String spaceId);
 
-    @Select("SELECT space_id,name,medical,deleting FROM knowledge_spaces ORDER BY medical DESC,name,space_id")
+    @Select("SELECT space_id,name,medical,deleting,embedding_binding FROM knowledge_spaces ORDER BY medical DESC,name,space_id")
     List<KnowledgeRows.Space> spaces();
 
     @Update("UPDATE knowledge_spaces SET deleting=TRUE WHERE space_id=#{spaceId}")
@@ -80,7 +90,10 @@ public interface KnowledgeMapper {
             """)
     int insertChunk(KnowledgeRows.Chunk chunk);
 
-    @Insert("MERGE INTO document_deletions(doc_id,space_id) KEY(doc_id) VALUES (#{docId},#{spaceId})")
+    @Insert("""
+            INSERT INTO document_deletions(doc_id,space_id) VALUES (#{docId},#{spaceId})
+            ON CONFLICT(doc_id) DO UPDATE SET space_id=excluded.space_id
+            """)
     int markDeleted(@Param("spaceId") String spaceId, @Param("docId") String docId);
 
     @Select("SELECT COUNT(*) FROM document_deletions WHERE space_id=#{spaceId} AND doc_id=#{docId}")
@@ -96,8 +109,10 @@ public interface KnowledgeMapper {
     KnowledgeRows.Chunk chunk(@Param("spaceId") String spaceId, @Param("nodeId") String nodeId);
 
     @Insert("""
-            MERGE INTO semantic_memories(memory_id,owner_id,memory_text,metadata_json,vector,updated_at)
-            KEY(memory_id) VALUES (#{memoryId},#{ownerId},#{memoryText},#{metadataJson},#{vector},#{updatedAt})
+            INSERT INTO semantic_memories(memory_id,owner_id,memory_text,metadata_json,vector,updated_at)
+            VALUES (#{memoryId},#{ownerId},#{memoryText},#{metadataJson},#{vector},#{updatedAt})
+            ON CONFLICT(memory_id) DO UPDATE SET owner_id=excluded.owner_id, memory_text=excluded.memory_text,
+                metadata_json=excluded.metadata_json, vector=excluded.vector, updated_at=excluded.updated_at
             """)
     int saveMemory(KnowledgeRows.Memory memory);
 

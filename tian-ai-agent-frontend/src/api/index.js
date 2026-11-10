@@ -1,10 +1,70 @@
 import axios from 'axios'
 
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || '/api'
+export const desktopClient = import.meta.env.MODE === 'desktop' || window.isTauri === true
+export const desktopApiSuggestion = import.meta.env.VITE_DESKTOP_API_BASE_URL?.trim() || ''
+const ENDPOINT_KEY = 'tian-desktop-api-url'
+const SESSION_KEY = 'tian-desktop-session'
+export const savedDesktopApi = desktopClient ? localStorage.getItem(ENDPOINT_KEY) || '' : ''
+export const API_BASE_URL = desktopClient ? savedDesktopApi : import.meta.env.VITE_API_BASE_URL || '/api'
 
 const request = axios.create({ baseURL: API_BASE_URL, timeout: 120000 })
 const TOKEN_KEY = 'tian-api-token'
-export const getApiToken = () => sessionStorage.getItem(TOKEN_KEY) || ''
+export const getApiToken = () => {
+  if (!desktopClient) return sessionStorage.getItem(TOKEN_KEY) || ''
+  try {
+    const session = JSON.parse(sessionStorage.getItem(SESSION_KEY))
+    return session?.apiUrl === savedDesktopApi ? session.token : ''
+  } catch {
+    return ''
+  }
+}
+
+function normalizeDesktopApi(address) {
+  const value = address.trim()
+  try {
+    const url = new URL(value)
+    if (/^https?:\/\//i.test(value) && !url.username && !url.password && !url.search && !url.hash) {
+      return url.origin + (url.pathname.replace(/\/+$/, '') || '/api')
+    }
+  } catch {
+    // 下面统一显示地址格式提示。
+  }
+  throw new Error('请输入有效的 HTTP 或 HTTPS 后端地址，例如 https://agent.example.com/api。')
+}
+
+export async function connectDesktop(address, token) {
+  const apiUrl = normalizeDesktopApi(address)
+  const credential = token.trim() || (apiUrl === savedDesktopApi ? getApiToken() : '')
+  if (!/^[\x21-\x7e]{24,}$/.test(credential)) {
+    throw new Error('请输入后端管理员分配的访问令牌。')
+  }
+
+  let response
+  try {
+    response = await fetch(apiUrl + '/model-providers', {
+      headers: { Authorization: 'Bearer ' + credential },
+      cache: 'no-store',
+      redirect: 'error',
+      signal: AbortSignal.timeout(10000)
+    })
+  } catch {
+    throw new Error('无法连接后端。请确认地址可达、HTTPS 证书有效，并且服务允许桌面端的跨域请求。')
+  }
+  if (response.status === 401 || response.status === 403) {
+    throw new Error('访问令牌无效或没有工作台权限，请向后端管理员确认。')
+  }
+  if (!response.ok) throw new Error('后端返回 HTTP ' + response.status + '，请核对 API 地址。')
+  const data = await response.json().catch(() => null)
+  if (typeof data?.version !== 'string' || !Array.isArray(data.providers)) {
+    throw new Error('该地址未返回工作台模型配置，请核对后端 API 地址。')
+  }
+
+  // 同一窗口内的令牌只用于通过验证的后端地址。
+  sessionStorage.setItem(SESSION_KEY, JSON.stringify({ apiUrl, token: credential }))
+  localStorage.setItem(ENDPOINT_KEY, apiUrl)
+  return { needsModel: !data.providers.some(provider => provider?.enabled && provider.hasApiKey) }
+}
+
 export const setApiToken = token => {
   if (token.trim()) sessionStorage.setItem(TOKEN_KEY, token.trim())
   else sessionStorage.removeItem(TOKEN_KEY)
@@ -80,6 +140,10 @@ export const dispatchAgent = (body, signal) => request.post('/ai/dispatch', body
 export const streamAgentDispatch = (body, onEvent, signal) => streamMedicalChat(
   '/ai/dispatch/stream', body, (data, type) => onEvent(type, JSON.parse(data)), signal
 )
+export const replyWorkspaceRead = (runId, requestId, result, signal) => request.post(
+  '/ai/local-workspace/' + encodeURIComponent(runId) + '/results/' + encodeURIComponent(requestId),
+  result, { signal, timeout: 10000 }
+)
 export const chatWithTools = (body, signal) => request.post('/ai/chat/tools', body, { signal })
 export const chatWithKnowledge = (body, signal) => request.post('/ai/chat/rag', body, { signal })
 export const createMedicalEvidenceReport = (body, signal) => request.post('/ai/medical/evidence-report', body, { signal })
@@ -102,7 +166,7 @@ export const getWikiGraph = spaceId => request.get('/knowledge-base/wiki-graph',
 export const compileWiki = spaceId => request.post('/knowledge-base/wiki-compile', null, { params: { spaceId } })
 export const getWikiPage = (spaceId, pageId) => request.get('/knowledge-base/wiki-pages/' + encodeURIComponent(pageId), { params: { spaceId } })
 export const getKnowledgeSpaces = () => request.get('/knowledge-base/spaces')
-export const createKnowledgeSpace = (name, medical) => request.post('/knowledge-base/spaces', { name, medical })
+export const createKnowledgeSpace = (name, medical, embeddingProviderId) => request.post('/knowledge-base/spaces', { name, medical, embeddingProviderId })
 export const deleteKnowledgeSpace = (id, accountName) => request.delete('/knowledge-base/spaces/' + encodeURIComponent(id), { data: { accountName } })
 export const getKnowledgeFiles = spaceId => request.get('/knowledge-base/files', { params: { spaceId } })
 export const deleteKnowledgeFile = (id, spaceId) => request.delete(`/knowledge-base/files/${id}`, { params: { spaceId } })
@@ -119,11 +183,24 @@ export const getAgentRuns = () => request.get('/agent-runs')
 export const getAgentRun = id => request.get(`/agent-runs/${id}`)
 
 export const getMcpServers = () => request.get('/mcp-servers')
-export const discoverMcpTools = (id, body) => request.post('/mcp-servers/' + encodeURIComponent(id) + '/discover', body)
+export const importMcpServer = body => request.post('/mcp-servers', body)
+export const discoverMcpTools = (id, body) => request.post(
+  id ? '/mcp-servers/' + encodeURIComponent(id) + '/discover' : '/mcp-servers/discover', body
+)
 export const saveMcpServer = (id, body) => request.put('/mcp-servers/' + encodeURIComponent(id), body)
 export const deleteMcpServer = id => request.delete('/mcp-servers/' + encodeURIComponent(id))
 
+export const getAgentPresets = collection => request.get('/' + collection)
+export const saveAgentPreset = (collection, id, body) => id
+  ? request.put('/' + collection + '/' + encodeURIComponent(id), body)
+  : request.post('/' + collection, body)
+export const deleteAgentPreset = (collection, id) => request.delete('/' + collection + '/' + encodeURIComponent(id))
+
 export const getModelProviders = () => request.get('/model-providers')
 export const saveModelProviders = settings => request.put('/model-providers', settings)
+
+export const getToolSettings = () => request.get('/tool-settings')
+export const saveToolCredential = (name, value) => request.put('/tool-settings/' + name, { value })
+export const clearToolCredential = name => request.delete('/tool-settings/' + name)
 
 export default request

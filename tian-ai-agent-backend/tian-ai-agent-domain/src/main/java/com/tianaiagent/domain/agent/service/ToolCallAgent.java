@@ -13,6 +13,7 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -57,6 +58,7 @@ public class ToolCallAgent extends ReActAgent {
 
     // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
     private final ChatOptions chatOptions;
+    private String skillInstructions = "";
 
     public ToolCallAgent(ToolCallback[] availableTools,
                          AsyncTaskExecutor parallelToolCallExecutor,
@@ -66,8 +68,9 @@ public class ToolCallAgent extends ReActAgent {
         this.toolCallingManager = ToolCallingManager.builder().build();
         this.parallelToolCallExecutor = parallelToolCallExecutor;
         this.parallelSafeTools = Set.copyOf(parallelSafeTools);
-        // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
+        // 模型请求和手动执行共享同一份工具定义，关闭模型适配器的自动执行。
         this.chatOptions = ToolCallingChatOptions.builder()
+                .toolCallbacks(availableTools)
                 .internalToolExecutionEnabled(false)
                 .build();
     }
@@ -141,8 +144,17 @@ public class ToolCallAgent extends ReActAgent {
         List<Message> messageList = new ArrayList<>();
         if (StrUtil.isNotBlank(systemPrompt)) messageList.add(new SystemMessage(systemPrompt));
         messageList.addAll(this.getMessageList());
+        if (!skillInstructions.isEmpty()) {
+            // 只修改发给模型的本轮用户消息，历史和工具上下文继续使用原始消息。
+            for (int i = messageList.size() - 1; i >= 0; i--) {
+                if (messageList.get(i) instanceof UserMessage user) {
+                    messageList.set(i, new UserMessage(AgentPresetService.withSkillInstructions(user.getText(), skillInstructions)));
+                    break;
+                }
+            }
+        }
         Prompt prompt = new Prompt(messageList, this.chatOptions);
-        return getChatClient().prompt(prompt).toolCallbacks(availableTools);
+        return getChatClient().prompt(prompt);
     }
 
     private String acceptResponse(ChatResponse chatResponse) {
@@ -155,7 +167,7 @@ public class ToolCallAgent extends ReActAgent {
             List<AssistantMessage.ToolCall> toolCallList = assistantMessage.getToolCalls();
             // 输出提示信息
             String thought = assistantMessage.getText();
-            log.info(getName() + "的思考：" + thought);
+            log.info("{}收到模型回复", getName());
             
             // 如果不需要调用工具，设置标志为 false
             if (toolCallList.isEmpty()) {
@@ -167,11 +179,8 @@ public class ToolCallAgent extends ReActAgent {
                 return "🤔 思考：" + thought;
             } else {
                 shouldActFlag = true;
-                log.info(getName() + "选择了 " + toolCallList.size() + " 个工具来使用");
-                String toolCallInfo = toolCallList.stream()
-                        .map(toolCall -> String.format("工具名称：%s，参数：%s", toolCall.name(), toolCall.arguments()))
-                        .collect(Collectors.joining("\n"));
-                log.info(toolCallInfo);
+                log.info("{}选择了工具 {}", getName(),
+                        toolCallList.stream().map(AssistantMessage.ToolCall::name).toList());
                 // 需要调用工具时，无需记录助手消息，因为调用工具时会自动记录
                 return "🤔 思考：" + thought;
             }

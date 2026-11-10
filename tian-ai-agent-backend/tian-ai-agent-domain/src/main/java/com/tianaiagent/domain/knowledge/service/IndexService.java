@@ -2,7 +2,6 @@ package com.tianaiagent.domain.knowledge.service;
 
 import com.tianaiagent.domain.knowledge.service.HierarchicalChunker;
 import com.tianaiagent.domain.knowledge.adapter.port.VectorStore;
-import com.tianaiagent.domain.knowledge.adapter.port.TextEmbedding;
 import com.tianaiagent.domain.knowledge.model.valobj.MedicalDocumentMetadata;
 import com.tianaiagent.domain.knowledge.adapter.port.KnowledgeIndex.Evidence;
 import com.tianaiagent.domain.knowledge.adapter.port.KnowledgeIndex.Retrieval;
@@ -30,7 +29,7 @@ public class IndexService {
     private static final Pattern WORD = Pattern.compile("[a-zA-Z0-9_.+-]+|[\\p{IsHan}]");
     private final KnowledgeRepository repository;
     private final HierarchicalChunker chunker;
-    private final TextEmbedding embeddings;
+    private final SpaceEmbeddings embeddings;
     private final DocMcpProperties properties;
     private final VectorStore vectorStore;
     private final List<Object> documentLocks = java.util.stream.IntStream.range(0, 64)
@@ -39,7 +38,7 @@ public class IndexService {
             .mapToObj(ignored -> new Object()).toList();
 
     public IndexService(KnowledgeRepository repository, HierarchicalChunker chunker,
-                        TextEmbedding embeddings, DocMcpProperties properties,
+                        SpaceEmbeddings embeddings, DocMcpProperties properties,
                         VectorStore vectorStore) {
         this.repository = repository;
         this.chunker = chunker;
@@ -48,8 +47,8 @@ public class IndexService {
         this.vectorStore = vectorStore;
     }
 
-    public KnowledgeSpace createSpace(String name, boolean medical) {
-        KnowledgeSpace space = KnowledgeSpace.create(name, medical);
+    public KnowledgeSpace createSpace(String name, boolean medical, String ownerId, String embeddingProviderId) {
+        KnowledgeSpace space = KnowledgeSpace.create(name, medical, embeddings.bind(ownerId, embeddingProviderId));
         repository.addSpace(space);
         return space;
     }
@@ -67,9 +66,10 @@ public class IndexService {
         KnowledgeSpace.requireId(spaceId);
         if (KnowledgeSpace.MEDICAL_ID.equals(spaceId)) throw new IllegalArgumentException("内置医疗知识库不能删除");
         synchronized (spaceLock(spaceId)) {
-            if (repository.findSpace(spaceId).isEmpty()) return;
+            KnowledgeSpace space = repository.findSpace(spaceId).orElse(null);
+            if (space == null) return;
             repository.markSpaceDeleting(spaceId);
-            vectorStore.deleteSpace(spaceId);
+            vectorStore.deleteSpace(space);
             cleanup.run();
             repository.deleteSpace(spaceId);
         }
@@ -92,7 +92,7 @@ public class IndexService {
         String sha = string(metadata.get("content_sha256"));
         List<HierarchicalChunker.ChunkDraft> drafts = chunker.split(safeId, markdown);
         List<HierarchicalChunker.ChunkDraft> leaves = drafts.stream().filter(HierarchicalChunker.ChunkDraft::leaf).toList();
-        List<float[]> vectors = embeddings.embedDocuments(leaves.stream().map(HierarchicalChunker.ChunkDraft::text).toList());
+        List<float[]> vectors = embeddings.embedDocuments(space, leaves.stream().map(HierarchicalChunker.ChunkDraft::text).toList());
         Map<String, float[]> byId = new HashMap<>();
         for (int i = 0; i < leaves.size(); i++) byId.put(leaves.get(i).nodeId(), vectors.get(i));
         List<ChunkRecord> records = drafts.stream().map(draft -> new ChunkRecord(
@@ -102,7 +102,7 @@ public class IndexService {
             synchronized (documentLock(safeId)) {
                 requireWritable(spaceId, safeId);
                 List<ChunkRecord> previous = repository.loadDocumentChunks(spaceId, safeId);
-                vectorStore.replaceDocument(spaceId, previous, records);
+                vectorStore.replaceDocument(space, previous, records);
                 List<ChunkRecord> persisted = vectorStore.external()
                         ? records.stream().map(IndexService::withoutVector).toList() : records;
                 repository.replaceDocument(spaceId, new DocumentRecord(safeId, title, sourceUri, sha, metadata), persisted);
@@ -119,12 +119,12 @@ public class IndexService {
         KnowledgeSpace space = space(spaceId);
         if (question == null || question.isBlank()) throw new IllegalArgumentException("question不能为空");
         int topK = Math.max(1, Math.min(requestedTopK, 20));
-        float[] queryVector = embeddings.embedQuery(question);
+        float[] queryVector = embeddings.embedQuery(space, question);
         Set<String> queryTerms = tokens(question);
         int vectorLimit = Math.max(topK * 10, properties.getRetrievalTopK());
         List<ScoredChunk> candidates = new ArrayList<>();
         Map<String, Boolean> deleted = new HashMap<>();
-        for (VectorStore.VectorCandidate vectorCandidate : vectorStore.search(spaceId, queryVector, vectorLimit)) {
+        for (VectorStore.VectorCandidate vectorCandidate : vectorStore.search(space, queryVector, vectorLimit)) {
             ChunkRecord chunk = vectorCandidate.chunk();
             if (deleted.computeIfAbsent(chunk.docId(), id -> repository.isDeleted(spaceId, id))
                     || !space.allowsDocument(chunk.metadata())) continue;
@@ -193,11 +193,11 @@ public class IndexService {
     public boolean deleteDocument(String spaceId, String docId) {
         String safeId = safeDocId(docId);
         synchronized (spaceLock(spaceId)) {
-            space(spaceId);
+            KnowledgeSpace space = space(spaceId);
             synchronized (documentLock(safeId)) {
                 if (belongsToAnotherSpace(spaceId, safeId)) return false;
                 repository.markDeleted(spaceId, safeId);
-                vectorStore.deleteDocument(spaceId, safeId);
+                vectorStore.deleteDocument(space, safeId);
                 return repository.deleteDocument(spaceId, safeId);
             }
         }
@@ -217,9 +217,9 @@ public class IndexService {
     }
 
     public Map<String, Object> status(String spaceId) {
-        space(spaceId);
+        KnowledgeSpace space = space(spaceId);
         Map<String, Object> result = new LinkedHashMap<>(repository.status(spaceId));
-        Map<String, Object> vectorStatus = vectorStore.status(spaceId);
+        Map<String, Object> vectorStatus = vectorStore.status(space);
         result.put("space_id", spaceId);
         result.put("vector_store", vectorStatus);
         if (vectorStatus.containsKey("vectors")) result.put("vectors", vectorStatus.get("vectors"));

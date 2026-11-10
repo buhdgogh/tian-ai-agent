@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 
 const routes = [
   { path: '/', redirect: '/agent' },
@@ -9,10 +9,13 @@ const routes = [
   { path: '/tasks', redirect: to => ({ path: '/agent-runs', query: { taskId: to.query.taskId } }) },
   { path: '/agent-runs', name: 'AgentRuns', component: () => import('../views/AgentRuns.vue'), meta: { title: 'Agent 运行日志 - Tian 知识工作台' } },
   { path: '/mcp-settings', name: 'McpSettings', component: () => import('../views/McpSettings.vue'), meta: { title: 'MCP 设置 - Tian 知识工作台' } },
+  { path: '/agent-presets', name: 'AgentPresets', component: () => import('../views/AgentPresetSettings.vue'), meta: { title: 'Skills 与 Prompt 模板 - Tian 知识工作台' } },
   { path: '/model-settings', name: 'ModelSettings', component: () => import('../views/ModelSettings.vue'), meta: { title: '模型设置 - Tian 知识工作台' } },
+  { path: '/tool-settings', name: 'ToolSettings', component: () => import('../views/ToolSettings.vue'), meta: { title: '配置中心 - Tian 知识工作台' } },
   { path: '/:pathMatch(.*)*', redirect: '/' }
 ]
 
-const router = createRouter({ history: createWebHistory(), routes, scrollBehavior: () => ({ top: 0 }) })
+const history = import.meta.env.MODE === 'desktop' ? createWebHashHistory() : createWebHistory()
+const router = createRouter({ history, routes, scrollBehavior: () => ({ top: 0 }) })
 router.beforeEach(to => { if (to.meta.title) document.title = to.meta.title })
 export default router

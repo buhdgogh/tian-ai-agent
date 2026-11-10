@@ -1,7 +1,7 @@
 <template>
   <section class="ui-page audit">
     <header class="ui-page-heading">
-      <div><span class="ui-kicker">Agent Runs</span><h1>运行日志</h1><p>查看执行路径、模型和工具调用，以及耗时和 Token 用量。</p></div>
+      <div><span class="ui-kicker">Agent Runs</span><h1>运行日志</h1><p>查看执行路径、模型和工具调用、缓存结果、耗时及 Token 用量。</p></div>
       <button class="ui-button" type="button" :disabled="loading" @click="refresh">
         <WorkspaceIcon name="refresh" /> {{ loading ? '刷新中' : '刷新' }}
       </button>
@@ -39,6 +39,7 @@
           <div><dt>输出 Token</dt><dd>{{ number(detail.summary.outputTokens) }}</dd></div>
           <div><dt>总 Token</dt><dd>{{ number(detail.summary.totalTokens) }}</dd></div>
         </dl>
+        <p v-if="cacheHits || cacheMisses" class="muted">缓存命中 {{ cacheHits }} 次 · 未命中 {{ cacheMisses }} 次</p>
         <div class="events-head">
           <h3>执行时间线</h3>
           <div class="filters" aria-label="筛选事件类型">
@@ -57,7 +58,7 @@
                   <strong>{{ event.model || event.name }}</strong>
                   <small v-if="event.provider">{{ event.provider }}</small>
                 </td>
-                <td><span class="ui-pill" :data-tone="statusTone(event.status)">{{ label(event.status) }}</span><small v-if="event.reason">{{ event.reason }}</small></td>
+                <td><span class="ui-pill" :data-tone="statusTone(event.status)">{{ label(event.status) }}</span><small v-if="event.reason">{{ eventReason(event) }}</small></td>
                 <td class="timeline"><div class="track"><div class="bar" :class="[event.kind, event.status]" :style="barStyle(event)"
                   :title="time(event.startedAt)"></div></div></td>
                 <td>{{ duration(event.elapsedMs) }}</td>
@@ -94,20 +95,28 @@ const visibleRuns = computed(() => taskId.value ? runs.value.filter(run => run.t
 const kindFilter = ref('')
 const eventFilters = [
   { value: '', label: '全部' }, { value: 'STAGE', label: '编排' },
-  { value: 'MODEL', label: '模型' }, { value: 'TOOL', label: '工具' }
+  { value: 'MODEL', label: '模型' }, { value: 'TOOL', label: '工具' }, { value: 'CACHE', label: '缓存' }
 ]
 const events = computed(() => [...(detail.value?.events || [])]
   .sort((a, b) => Date.parse(a.startedAt) - Date.parse(b.startedAt)))
+const cacheEvents = computed(() => events.value.filter(event => event.kind === 'CACHE'))
+const cacheHits = computed(() => cacheEvents.value.filter(event => event.status === 'HIT').length)
+const cacheMisses = computed(() => cacheEvents.value.filter(event => event.status === 'MISS').length)
 const filteredEvents = computed(() => kindFilter.value ? events.value.filter(event => event.kind === kindFilter.value) : events.value)
 watch(selectedId, () => { kindFilter.value = '' })
-const statusTone = status => ['SUCCESS', 'COMPLETED'].includes(status) ? 'positive'
+const statusTone = status => ['SUCCESS', 'COMPLETED', 'HIT'].includes(status) ? 'positive'
   : ['RUNNING', 'PENDING'].includes(status) ? 'active'
     : ['FAILED', 'TIMEOUT', 'REJECTED', 'BLOCKED'].includes(status) ? 'negative' : 'neutral'
-const kindName = kind => ({ MODEL: '模型', TOOL: '工具', STAGE: '阶段' })[kind] || kind
+const kindName = kind => ({ MODEL: '模型', TOOL: '工具', STAGE: '阶段', CACHE: '缓存' })[kind] || kind
+const cacheReasons = {
+  EXACT: '精确匹配', SEMANTIC: '语义匹配', DISABLED: '缓存已关闭',
+  INELIGIBLE: '请求不符合缓存规则', CACHE_READ_FAILED: '缓存读取失败，已回退到完整检索'
+}
+const eventReason = event => event.kind === 'CACHE' ? cacheReasons[event.reason] || event.reason : event.reason
 const runName = kind => ({ CHAT: '对话', CHAT_STREAM: '流式对话', TOOL_CHAT: '工具对话', RAG_CHAT: '知识库对话',
   REACT: 'ReAct', WORKFLOW: '工作流', WIKI_COMPILE: 'Wiki 编译', DISPATCH: '意图分发', EVIDENCE_REPORT: '证据报告' })[kind] || kind
 const label = status => ({ RUNNING: '运行中', COMPLETED: '完成', PENDING: '等待执行', SUCCESS: '成功', FAILED: '失败',
-  SKIPPED: '跳过', BLOCKED: '拦截', REJECTED: '拒绝', CANCELLED: '取消', TIMEOUT: '超时' })[status] || status
+  SKIPPED: '跳过', BLOCKED: '拦截', REJECTED: '拒绝', CANCELLED: '取消', TIMEOUT: '超时', HIT: '命中', MISS: '未命中' })[status] || status
 const number = value => value == null ? '—' : value.toLocaleString()
 const time = value => new Date(value).toLocaleString('zh-CN', { hour12: false })
 const duration = ms => ms >= 1000 ? `${(ms / 1000).toFixed(2)} s` : `${ms} ms`
@@ -219,7 +228,7 @@ td small { font-size:11px; }
 .track { position:relative; height:8px; border-radius:8px; background:#edf0f8; }
 .bar { position:absolute; height:100%; border-radius:8px; background:#8997af; }
 .bar.MODEL { background:#4b57c7; }
-.bar.TOOL { background:#19826d; }
+.bar.TOOL,.bar.CACHE.HIT { background:#19826d; }
 .bar.FAILED,.bar.TIMEOUT,.bar.BLOCKED,.bar.REJECTED { background:#ca4d62; }
 .empty { padding:33px 12px; color:var(--muted); text-align:center; }
 @media (max-width:820px) { .workspace { grid-template-columns:1fr; } .runs { max-height:260px; overflow:auto; } }

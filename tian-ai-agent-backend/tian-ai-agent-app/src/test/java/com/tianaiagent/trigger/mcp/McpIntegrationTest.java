@@ -16,6 +16,7 @@ import com.tianaiagent.domain.knowledge.adapter.port.MultimodalDocumentParser;
 import com.tianaiagent.domain.task.model.valobj.TaskStatus;
 import com.tianaiagent.types.exception.ModelUnavailableException;
 import com.tianaiagent.types.storage.FileConstant;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
@@ -41,10 +42,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.hamcrest.Matchers.containsString;
 import static org.mockito.Mockito.when;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -55,6 +60,11 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "agent.access.admin-token=admin-test-token-123456789",
         "agent.access.users[0].id=reader",
         "agent.access.users[0].token=user-test-token-123456789",
+        "agent.access.users[1].id=toolsettings_test_reader",
+        "agent.access.users[1].token=toolsettings-reader-test-token-123456789",
+        "PERSONAL_SETTINGS_ADMIN_ENV_FALLBACK=true",
+        "MINERU_TOKEN=development-mineru-test",
+        "SEARCH_API_KEY=development-search-test",
         "agent.rag.semantic-cache.enabled=false",
         "doc-mcp.enabled=true",
         "doc-mcp.mineru.enabled=false",
@@ -62,7 +72,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "knowledge-base.storage.mode=local",
         "knowledge-base.mcp.parse-batch-window-ms=0",
         "knowledge-base.mcp.parse-poll-interval-ms=200",
-        "spring.datasource.url=jdbc:h2:mem:mcp-test;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:sqlite::memory:",
         "doc-mcp.vector-store=local",
         "doc-mcp.embedding.provider=local",
         "doc-mcp.embedding.dimensions=128",
@@ -84,6 +94,36 @@ class McpIntegrationTest {
     @MockitoBean(name = "wikiAnswerModel") com.tianaiagent.domain.knowledge.adapter.port.AnswerModel answerModel;
     @MockitoBean UploadRateLimiter uploadRateLimiter;
     @MockitoBean MultimodalDocumentParser mineru;
+
+    @BeforeEach
+    void bindMineru() {
+        when(mineru.withToken(anyString())).thenReturn(mineru);
+    }
+
+    @Test
+    void toolSettingsArePrivateAndDevelopmentCredentialsAreAdminOnly() throws Exception {
+        String admin = "Bearer admin-test-token-123456789";
+        String reader = "Bearer toolsettings-reader-test-token-123456789";
+        mvc.perform(get("/tool-settings")).andExpect(status().isUnauthorized());
+        mvc.perform(get("/tool-settings").header("Authorization", admin)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.search").value("DEVELOPMENT"));
+        try {
+            mvc.perform(get("/tool-settings").header("Authorization", reader)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.search").value("UNCONFIGURED"));
+            mvc.perform(put("/tool-settings/search").header("Authorization", reader)
+                    .contentType(MediaType.APPLICATION_JSON).content("{\"value\":\"personal-search-test\"}"))
+                    .andExpect(status().isNoContent());
+            mvc.perform(get("/tool-settings").header("Authorization", reader)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.search").value("PERSONAL"))
+                    .andExpect(content().string(org.hamcrest.Matchers.not(containsString("personal-search-test"))));
+            mvc.perform(get("/tool-settings").header("Authorization", admin)).andExpect(status().isOk())
+                    .andExpect(jsonPath("$.search").value("DEVELOPMENT"));
+        } finally {
+            mvc.perform(delete("/tool-settings/search").header("Authorization", reader)).andExpect(status().isNoContent());
+        }
+        mvc.perform(get("/tool-settings").header("Authorization", reader)).andExpect(status().isOk())
+                .andExpect(jsonPath("$.search").value("UNCONFIGURED"));
+    }
 
     private static final Map<String, Object> APPROVED = Map.of(
             "issuer", "Test", "version", "1", "publishedAt", "2026-01-01",
@@ -197,6 +237,7 @@ class McpIntegrationTest {
         when(mineru.isAvailable()).thenReturn(true);
         when(mineru.parseUpload(any(), any())).thenReturn(raw);
         String first = uploadWikiSource(admin, space, "first.md", raw);
+        verify(mineru).withToken("development-mineru-test");
         assertThat(repository.loadDocumentChunks(space, first)).extracting(ChunkRecord::text)
                 .allMatch(text -> !text.contains("内部样稿"))
                 .anyMatch(text -> text.contains("正文证据"));

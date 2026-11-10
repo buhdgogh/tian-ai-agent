@@ -7,7 +7,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-/** 使用独立 Milvus Collection（本地模式使用 H2）保存会话长期语义记忆。 */
+/** 使用独立 Milvus Collection（本地模式使用 SQLite）保存会话长期语义记忆。 */
 public class VectorSemanticMemoryGateway implements SemanticMemoryGateway {
     private final MemoryVectorStorage storage;
     private final TextEmbedding embeddingService;

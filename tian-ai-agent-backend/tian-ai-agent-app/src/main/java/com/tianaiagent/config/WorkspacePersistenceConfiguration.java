@@ -1,15 +1,21 @@
 package com.tianaiagent.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.tianaiagent.domain.agent.adapter.repository.AgentPresetStore;
 import com.tianaiagent.domain.agent.adapter.repository.AgentRunRepository;
 import com.tianaiagent.domain.agent.adapter.repository.ModelProviderStore;
+import com.tianaiagent.domain.agent.adapter.repository.ToolCredentialStore;
 import com.tianaiagent.infrastructure.adapter.repository.MysqlWorkspaceDatabase;
+import com.tianaiagent.infrastructure.adapter.repository.agent.FileAgentPresetStore;
 import com.tianaiagent.infrastructure.adapter.repository.agent.FileAgentRunRepository;
 import com.tianaiagent.infrastructure.adapter.repository.agent.FileModelProviderStore;
+import com.tianaiagent.infrastructure.adapter.repository.agent.EncryptedToolCredentialStore;
+import com.tianaiagent.infrastructure.adapter.repository.agent.MysqlAgentPresetStore;
 import com.tianaiagent.infrastructure.adapter.repository.agent.MysqlAgentRunRepository;
 import com.tianaiagent.infrastructure.adapter.repository.agent.MysqlModelProviderStore;
 import com.tianaiagent.infrastructure.dao.mysql.AgentRunMapper;
 import com.tianaiagent.infrastructure.dao.mysql.ModelProviderMapper;
+import com.tianaiagent.infrastructure.dao.mysql.ToolCredentialMapper;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -21,6 +27,18 @@ import org.springframework.core.io.Resource;
 
 @Configuration(proxyBeanMethods = false)
 class WorkspacePersistenceConfiguration {
+    @Bean
+    ToolCredentialStore toolCredentialStore(ObjectProvider<MysqlWorkspaceDatabase> mysql) {
+        var database = mysql.getIfAvailable();
+        return new EncryptedToolCredentialStore(database == null ? null : database.mapper(ToolCredentialMapper.class));
+    }
+
+    @Bean
+    AgentPresetStore agentPresetStore(ObjectMapper mapper, ObjectProvider<MysqlWorkspaceDatabase> mysql) {
+        var database = mysql.getIfAvailable();
+        return database == null ? new FileAgentPresetStore(mapper) : new MysqlAgentPresetStore(database.dataSource());
+    }
+
     @Bean
     @ConditionalOnProperty(name = "agent.persistence.mysql.enabled", havingValue = "true")
     MysqlWorkspaceDatabase mysqlWorkspaceDatabase(

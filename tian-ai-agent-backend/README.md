@@ -27,7 +27,7 @@
 | `api` | HTTP/MCP 对外契约，例如请求体、医疗报告和 MCP 响应封装 |
 | `app` | Spring Boot 启动、Bean 装配、运行配置与可执行 JAR |
 | `domain` | 按智能体、医疗、会话、知识库和任务组织出站端口、模型、业务规则与用例 |
-| `infrastructure` | 领域端口的实现，包括 Redis、MySQL、H2、Milvus、OSS、文档解析和模型调用 |
+| `infrastructure` | 领域端口的实现，包括 Redis、MySQL、SQLite、Milvus、OSS、文档解析和模型调用 |
 | `trigger` | HTTP、SSE 和 MCP 入站适配 |
 | `types` | 跨模块使用的配置、常量和数据类型 |
 
@@ -57,10 +57,12 @@ domain/
 
 ```powershell
 mvn -pl tian-ai-agent-app -am clean package -DskipTests
-java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
+java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p.log' -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 ```
 
 主服务地址为 `http://localhost:8123/api`，接口文档为 `http://localhost:8123/api/swagger-ui.html`。
+
+从后端根目录启动时，Spring Boot 将 UTF-8 运行日志写入 `logs/tian-ai-agent.log`，并按大小滚动。Maven 的 app 模块测试写入 `logs/tian-ai-agent-test.log`，测试 JVM 的崩溃报告和编译重放文件也写入根目录的 `logs`。使用 IDEA 运行时，将工作目录设为后端根目录，并把上面两个 `-XX` 选项填入 VM options 以收集 JVM 诊断文件。
 
 网页搜索工具 `searchWeb` 使用 SearchAPI。在后端根目录的 `.env` 中填写 `SEARCH_API_KEY` 后重启，也可以通过系统环境变量 `SEARCH_API_KEY` 或 Spring 配置项 `search-api.api-key` 提供密钥。知识库检索使用独立的文档和索引配置。
 
@@ -72,13 +74,13 @@ java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 
 `doc-mcp.enabled` 默认 `true`。设为 `false` 后重启，上传、检索、知识库问答和文档删除返回 `503`，管理员仍可查看文件列表，已认证用户仍可进行普通医疗对话。启用长期记忆时，删除会话需要语义存储可用，删除失败可在服务恢复后重试。
 
-本地 H2 默认使用 `data/knowledge.mv.db`。如果需要继续使用归档中的旧 Admin 会话和文件，从后端根目录设置 `$env:TIAN_DATA_DIR = 'tmp/legacy-layout/tian-ai-agent-admin/tmp'` 后再启动。文档工具和配置见 [文档 MCP](docs/guides/document-mcp.md)。
+知识库默认使用 SQLite 文件 `data/knowledge.sqlite`。已有知识库文件可通过[一次性迁移说明](docs/sqlite/README.md)导入。如果需要继续使用归档中的旧 Admin 会话和文件，从后端根目录设置 `$env:TIAN_DATA_DIR = 'tmp/legacy-layout/tian-ai-agent-admin/tmp'` 后再启动。文档工具和配置见 [文档 MCP](docs/guides/document-mcp.md)。
 
 ## 本地后端与 Docker 依赖
 
-Spring Boot 和 MySQL 在 Windows 本机运行。[Compose](docs/docker/compose.yml) 管理 Redis、Milvus、etcd 和 MinIO，沿用现有数据卷。Redis、Milvus 和 MinIO 的发布端口绑定到本机回环地址。
+Spring Boot 在 Windows 本机运行。[Compose](docs/docker/compose.yml) 管理 MySQL、Redis、Milvus、etcd 和 MinIO。MySQL 使用独立数据卷，已发布的数据库和存储端口绑定到本机回环地址。
 
-先启动 Docker Desktop，在后端根目录运行以下命令。可在根目录的 `.env` 中覆盖容器端口，参考 [环境变量模板](docs/docker/.env.example)。
+先启动 Docker Desktop，在后端根目录的 `.env` 中通过 `MYSQL_PASSWORD` 配置 MySQL root 密码，再运行以下命令。可在 `.env` 中覆盖容器端口，参考 [环境变量模板](docs/docker/.env.example)。
 
 ```powershell
 docker compose --env-file .env -f docs/docker/compose.yml up -d
@@ -88,10 +90,10 @@ docker compose --env-file .env -f docs/docker/compose.yml ps
 按 [MySQL 部署配置](docs/mysql/README.md) 准备数据库后，在 IDEA 中选择 `local` 活动配置，或在后端根目录启动 JAR。
 
 ```powershell
-java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar --spring.profiles.active=local
+java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p.log' -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar --spring.profiles.active=local
 ```
 
-默认配置使用 `127.0.0.1:3306` 的 MySQL 持久化会话，并连接 `127.0.0.1:6379` 的 Redis。`local` 额外启用 `127.0.0.1:19530` 的 Milvus 长期记忆。若修改了容器端口，同步修改 [本地配置](tian-ai-agent-app/src/main/resources/application-local.yml)。
+默认配置使用 `127.0.0.1:13306` 的 MySQL 持久化会话，并连接 `127.0.0.1:6379` 的 Redis。`local` 额外启用 `127.0.0.1:19530` 的 Milvus 长期记忆。MySQL 宿主机端口由 `MYSQL_PORT` 统一设置。修改 Redis 或 Milvus 端口后，请同步更新 [本地配置](tian-ai-agent-app/src/main/resources/application-local.yml)。
 
 后端健康检查位于 `http://localhost:8123/api/health`。Milvus WebUI 位于 `http://localhost:9091/webui/`，MinIO Console 位于 `http://localhost:9001`。旧版 Compose 的 `admin` 或 `mysql` 容器如仍在运行，可单独停止并保留原数据卷。
 
@@ -132,6 +134,24 @@ java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar --spring.profiles.a
 ```
 
 对话和工作流请求可选填 `spaceId`。省略时不会检索任何空间，也不会提供知识库工具。会话列表、历史消息和删除接口接受同一个 `spaceId`，相同的 `chatId` 在不同空间使用各自的历史。
+
+## 配置中心
+
+工作台的「配置中心」按账号保存 MinerU Token 和 SearchAPI Key。上传文档时，自动模式优先使用当前上传账号的 MinerU Token，缺少 Token 或 MinerU 失败时由 Tika 解析。网页搜索工具使用当前问答账号的 SearchAPI Key。配置读取接口只返回状态。
+
+本机开发可在后端根目录的 `.env` 设置 `PERSONAL_SETTINGS_ADMIN_ENV_FALLBACK=true`。管理员未配置个人凭据时，可使用 `MINERU_TOKEN` 和 `SEARCH_API_KEY`。普通账号使用自己的配置。
+
+## 本地工作区
+
+在 Chrome 或 Edge 通过 HTTPS 或 localhost 打开工作台，进入 Agent 问答，点击输入框旁的「选择工作区」并授权读取项目目录。可以提问「请阅读 README 和构建配置，说明这个项目如何启动」。目录句柄留在浏览器。Agent 按需取得目录条目和 UTF-8 文本片段，片段会发给后端与当前模型供本轮回答使用。
+
+工作区问答使用当前页面的流式连接，只提供只读目录工具。关闭或刷新页面后需要重新选目录。读取会跳过常见的凭据文件、版本库元数据和依赖目录，单个文本文件上限为 1 MiB。
+
+## Skills 与 Prompt 模板
+
+在工作台右上角打开「Skills / Prompt」，可为当前账号新增、编辑、启停和删除配置。Agent 问答每轮可勾选最多 5 个已启用的 Skill。Skill 正文作为本轮用户指令参与回答和工作流执行。选择 Prompt 模板会将正文插入输入框，可在发送前编辑。
+
+配置接口为 `/api/skills` 和 `/api/prompt-templates`，支持列表、新增、更新和删除。调用 Agent 问答接口时，可在 `/api/ai/dispatch`、`/api/ai/dispatch/stream` 或 `/api/ai/agent/stream` 的请求体中传入 `skillIds`。启用工作台 MySQL 时，配置写入 `agent_preset`，否则保存在数据目录的 `agent-presets` 下。
 
 ## 模型提供商与运行审计
 
@@ -192,7 +212,7 @@ agent:
 
 Wiki 编译读取文档解析目录中的完整 Markdown，使用已配置的模型提取实体、概念和综合页，再校验同空间引用。成功产物位于 `doc-mcp.runtime-dir/wiki/<spaceId>/<版本>/` 下的 `entities`、`concepts`、`syntheses`，每个目录内保存 Markdown，`current` 指向最新成功版本。原文变更后需要重新编译。单次最多 100 份索引文档、24 万字符和 150 个 Wiki 页面。
 
-H2 按空间存储和查询文档及片段，Milvus 在选定分区内召回。内置 `medical` 沿用已有的 Milvus 默认分区，新建空间分别使用各自的分区。文件路径、解析缓存和问答缓存都按空间区分。
+SQLite 按空间存储和查询文档及片段，Milvus 在选定分区内召回。内置 `medical` 沿用已有的 Milvus 默认分区，新建空间分别使用各自的分区。文件路径、解析缓存和问答缓存都按空间区分。
 
 主应用不在启动阶段构建内存向量库；MinerU 解析结果由 Java 文档 MCP 完成 `4096/1024/256` 分层切片、Embedding、Milvus/关键词召回和 MMR 重排。
 

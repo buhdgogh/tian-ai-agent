@@ -1,6 +1,24 @@
 name: tian-ai-agent
 
 services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-tian_ai_agent}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_PASSWORD:?Set MYSQL_PASSWORD in .env}
+      MYSQL_ROOT_HOST: ${MYSQL_ROOT_HOST:-localhost}
+    ports:
+      - "127.0.0.1:${MYSQL_PORT:-13306}:3306"
+    volumes:
+      - mysql_workspace_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD-SHELL", 'test "$$(MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysql --protocol=socket -uroot -D"$$MYSQL_DATABASE" -Nse "SELECT @@skip_networking")" = 0']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    restart: unless-stopped
+
   etcd:
     image: quay.io/coreos/etcd:v3.5.25
     command: >-
@@ -81,6 +99,7 @@ services:
     restart: unless-stopped
 
 volumes:
+  mysql_workspace_data:
   redis_data:
   etcd_data:
   minio_data:

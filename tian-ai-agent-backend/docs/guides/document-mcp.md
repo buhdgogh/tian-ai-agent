@@ -10,8 +10,8 @@
 - SHA-256 + 解析参数缓存
 - `4096 / 1024 / 256` 多层级 Chunk，父子关系持久化
 - DashScope 批量 Embedding；本地开发可使用确定性哈希向量
-- H2 事务化保存文档、任务和层级 Chunk 元数据
-- 可切换 H2 本地向量或 Milvus 向量存储，支持按文档覆盖更新和删除
+- SQLite 事务化保存文档、任务和层级 Chunk 元数据
+- 可切换 SQLite 本地向量或 Milvus 向量存储，支持按文档覆盖更新和删除
 - 稠密向量 + 关键词覆盖率混合召回、单文档候选限制和 MMR 去重
 - 基于 Qwen 的证据约束问答；未配置 API Key 时返回可追溯原文
 - 按相关性、证据充分度与来源冲突进行证据分级，低证据请求拒答或提示人工复核
@@ -28,7 +28,7 @@
 | `query_knowledge` | 生成带来源的答案 |
 | `knowledge_base_status` | 返回文档、Chunk、向量数量 |
 
-检索、问答、片段上下文和状态查询都需要显式提供 `space_id`。管理员通过知识库 HTTP 接口管理空间和文档。内置医疗空间的入库和检索校验发布状态，通用空间无需医疗审核元数据。文档删除会在 H2 留下删除标记，阻止尚未结束的解析任务重新写入同一文档。
+检索、问答、片段上下文和状态查询都需要显式提供 `space_id`。管理员通过知识库 HTTP 接口管理空间和文档。内置医疗空间的入库和检索校验发布状态，通用空间无需医疗审核元数据。文档删除会在 SQLite 留下删除标记，阻止尚未结束的解析任务重新写入同一文档。
 
 业务工具使用统一响应结构。
 
@@ -58,13 +58,13 @@ java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 - `mineru`：强制使用 MinerU；未配置 Token 或远端失败时任务失败
 - `tika`：强制使用本地 Tika，适合普通电子版 PDF/Office 文档
 
-MinerU解析完成后只把Markdown交还Java，后续层级切块、Embedding、H2/Milvus写入、混合召回和MMR均在Java侧完成。
+MinerU解析完成后只把Markdown交还Java，后续层级切块、Embedding、SQLite/Milvus写入、混合召回和MMR均在Java侧完成。
 
 使用 Milvus 时，将 `doc-mcp.vector-store` 设为 `milvus`，并在 `doc-mcp.milvus` 下填写连接和集合配置。
 
-Milvus 模式将叶子 Chunk 向量与长期记忆分别保存到独立 Collection；文档、解析任务和层级关系仍由 H2 管理。
+Milvus 模式将叶子 Chunk 向量与长期记忆分别保存到独立 Collection；文档、解析任务和层级关系仍由 SQLite 管理。
 同一个 `doc_id` 再次入库时会先 upsert 新叶子 Chunk，再删除已经失效的旧 Chunk；
-知识库文档删除会清理 H2 元数据和 Milvus 向量。首次在本地模式与 Milvus 模式之间切换后，
+知识库文档删除会清理 SQLite 元数据和 Milvus 向量。首次在本地模式与 Milvus 模式之间切换后，
 需要重新提交既有文档以完成向量迁移。Embedding 维度变化时应使用新的 Collection 名称或重建原 Collection。
 
 默认 MCP 地址为 `http://127.0.0.1:8123/api/mcp`。将 `doc-mcp.enabled` 设为 `false` 后关闭此路由。
@@ -111,7 +111,7 @@ curl -X POST http://127.0.0.1:8123/api/mcp \
 ## 说明
 
 - Java 版没有依赖 LlamaIndex；层级切块、向量计算、余弦检索、混合打分和 MMR 均为本模块实现。
-- 默认 H2 向量检索会在 JVM 中计算余弦相似度，适合单机与测试环境。配置 `doc-mcp.vector-store: milvus` 后由 Milvus 完成向量候选召回，Java 侧继续执行关键词融合、单文档候选限制和 MMR 去重。
+- 默认 SQLite 向量检索会在 JVM 中计算余弦相似度，适合单机与测试环境。配置 `doc-mcp.vector-store: milvus` 后由 Milvus 完成向量候选召回，Java 侧继续执行关键词融合、单文档候选限制和 MMR 去重。
 - MinerU REST 字段集中在 `MineruClient`。如果所使用的 MinerU 平台版本调整了 API 字段，只需修改这一适配器。
 - HTTP 文档下载会拒绝回环、内网、链路本地和组播地址，避免把 MCP 工具变成 SSRF 入口。
 - 本地文件解析只读取 `doc-mcp.local-source-root` 指定目录下的文件，默认使用数据目录下的 `knowledge-base`。

@@ -5,12 +5,13 @@ import com.tianaiagent.domain.conversation.adapter.port.SemanticMemoryGateway.Ma
 import com.tianaiagent.infrastructure.gateway.model.EmbeddingService;
 
 import com.tianaiagent.domain.knowledge.model.entity.ChunkRecord;
+import com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.util.List;
 import java.util.Comparator;
 
-/** 默认单机实现：向量保存在 H2，检索时在 JVM 中计算余弦相似度。 */
+/** 默认单机实现：向量保存在 SQLite，检索时在 JVM 中计算余弦相似度。 */
 @ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "local", matchIfMissing = true)
 public class LocalVectorStore implements VectorStore, MemoryVectorStorage {
     private final MybatisKnowledgeRepository repository;
@@ -20,26 +21,26 @@ public class LocalVectorStore implements VectorStore, MemoryVectorStorage {
     }
 
     @Override
-    public void replaceDocument(String spaceId, List<ChunkRecord> previous, List<ChunkRecord> current) {
-        // H2 的文档与 Chunk 由 MybatisKnowledgeRepository 在同一事务中替换。
+    public void replaceDocument(KnowledgeSpace space, List<ChunkRecord> previous, List<ChunkRecord> current) {
+        // SQLite 的文档与 Chunk 由 MybatisKnowledgeRepository 在同一事务中替换。
     }
 
     @Override
-    public List<VectorCandidate> search(String spaceId, float[] queryVector, int limit) {
-        return repository.loadLeafChunks(spaceId).stream()
+    public List<VectorCandidate> search(KnowledgeSpace space, float[] queryVector, int limit) {
+        return repository.loadLeafChunks(space.id()).stream()
                 .map(chunk -> new VectorCandidate(chunk,
                         Math.max(0, EmbeddingService.cosine(queryVector, chunk.vector()))))
                 .toList();
     }
 
     @Override
-    public void deleteDocument(String spaceId, String documentId) {
-        // H2 删除由 MybatisKnowledgeRepository 负责。
+    public void deleteDocument(KnowledgeSpace space, String documentId) {
+        // SQLite 删除由 MybatisKnowledgeRepository 负责。
     }
 
     @Override
-    public void deleteSpace(String spaceId) {
-        // H2 删除由 MybatisKnowledgeRepository 负责。
+    public void deleteSpace(KnowledgeSpace space) {
+        // SQLite 删除由 MybatisKnowledgeRepository 负责。
     }
 
     @Override
@@ -74,5 +75,5 @@ public class LocalVectorStore implements VectorStore, MemoryVectorStorage {
     public boolean external() { return false; }
 
     @Override
-    public String name() { return "h2-float32"; }
+    public String name() { return "sqlite-float32"; }
 }

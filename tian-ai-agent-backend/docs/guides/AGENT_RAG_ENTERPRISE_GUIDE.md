@@ -45,7 +45,7 @@
 
 `QUEUED -> UPLOADING -> PARSING -> INDEXING -> INDEXED/FAILED`
 
-应用服务将本地文件或 OSS 签名地址交给文档解析流水线。MinerU 或 Tika 返回文本后，由 Java 侧分块并写入 H2 和配置的向量存储。
+应用服务将本地文件或 OSS 签名地址交给文档解析流水线。MinerU 或 Tika 返回文本后，由 Java 侧分块并写入 SQLite 和配置的向量存储。
 
 ## 6. 混合检索与引用
 

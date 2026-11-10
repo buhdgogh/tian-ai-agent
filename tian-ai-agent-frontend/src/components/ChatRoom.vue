@@ -53,13 +53,24 @@
       <article v-if="generating && !emergencyText && !messages.at(-1)?.content" class="message assistant"><div class="avatar"><WorkspaceIcon name="agent" /></div><div class="bubble loading"><i></i><i></i><i></i><span>正在处理请求…</span></div></article>
     </div>
     <footer>
-      <TrSender v-model="input" class="composer" :placeholder="placeholder" :loading="generating"
-        :mode="$slots['composer-actions'] ? 'multiple' : 'single'"
-        :auto-size="{ minRows: 1, maxRows: 5 }" @submit="send" @cancel="emit('stop-generation')">
-        <template v-if="$slots['composer-actions']" #footer-right>
-          <slot name="composer-actions" />
-        </template>
-      </TrSender>
+      <div class="composer-wrap" @keydown.capture="handlePromptKeys">
+        <div v-if="promptPickerVisible" ref="promptMenu" class="ui-panel prompt-menu" role="group" aria-label="Prompt 模板">
+          <p v-if="!promptTemplates.length" class="prompt-loading" role="status">正在加载 Prompt 模板…</p>
+          <button v-for="(template, index) in promptTemplates" :key="template.id" type="button"
+            class="prompt-option" :class="{ 'is-active': index === activePrompt }"
+            @mousedown.prevent @mouseenter="activePrompt = index" @click="insertPrompt(template)">
+            <strong>{{ template.name }}</strong>
+            <small v-if="template.description">{{ template.description }}</small>
+          </button>
+        </div>
+        <TrSender ref="sender" v-model="input" class="composer" :placeholder="placeholder" :loading="generating"
+          :mode="$slots['composer-actions'] ? 'multiple' : 'single'" :auto-size="{ minRows: 1, maxRows: 5 }"
+          @input="onComposerInput" @blur="closePromptPicker" @submit="send" @cancel="emit('stop-generation')">
+          <template v-if="$slots['composer-actions']" #footer-right>
+            <slot name="composer-actions" />
+          </template>
+        </TrSender>
+      </div>
       <p class="privacy">请勿提交个人身份信息或未获授权的敏感资料。</p>
       <p v-if="medical" class="boundary">提供健康信息与就医沟通支持，不能替代医生、药师或急救服务。</p>
     </footer>
@@ -72,9 +83,93 @@ import DOMPurify from 'dompurify'
 import { TrSender } from '@opentiny/tiny-robot'
 import '@opentiny/tiny-robot/dist/style.css'
 import WorkspaceIcon from './WorkspaceIcon.vue'
-const props=defineProps({medical:Boolean,messages:{type:Array,default:()=>[]},connectionStatus:{type:String,default:'disconnected'},aiType:{type:String,default:'medical'},themeColor:{type:String,default:'#3f49ba'},themeColorRgb:{type:String,default:'8,127,140'},title:{type:String,default:'知识助手'},subtitle:{type:String,default:'选择知识库空间，按需检索文档或直接提问'},welcomeIcon:{type:String,default:'⚕'},suggestions:{type:Array,default:()=>[]},placeholder:{type:String,default:'输入问题或描述要完成的任务'},emergencyText:{type:String,default:''}})
+const props=defineProps({medical:Boolean,messages:{type:Array,default:()=>[]},connectionStatus:{type:String,default:'disconnected'},aiType:{type:String,default:'medical'},themeColor:{type:String,default:'#3f49ba'},themeColorRgb:{type:String,default:'8,127,140'},title:{type:String,default:'知识助手'},subtitle:{type:String,default:'选择知识库空间，按需检索文档或直接提问'},welcomeIcon:{type:String,default:'⚕'},suggestions:{type:Array,default:()=>[]},placeholder:{type:String,default:'输入问题或描述要完成的任务'},emergencyText:{type:String,default:''},promptTemplates:{type:Array,default:()=>[]},promptTemplatesLoading:Boolean})
 const emit=defineEmits(['send-message','stop-generation']),input=ref(''),scroller=ref(null)
 const generating=computed(()=>props.connectionStatus==='connecting')
+const sender = ref(null)
+const promptMenu = ref(null)
+const promptPosition = ref(null)
+const activePrompt = ref(0)
+let pendingPromptPosition = null
+const promptPickerVisible = computed(() => promptPosition.value !== null && !generating.value
+  && (props.promptTemplates.length > 0 || props.promptTemplatesLoading))
+
+function slashPosition(caretOffset = 0) {
+  const selection = sender.value?.editor?.state.selection
+  if (!selection?.empty) return null
+  const { $from, from } = selection
+  const offset = $from.parentOffset + caretOffset
+  if (offset > $from.parent.content.size) return null
+  const before = $from.parent.textBetween(0, offset)
+  return /(?:^|\s)\/$/.test(before) ? from + caretOffset - 1 : null
+}
+
+function onComposerInput() {
+  if (generating.value) {
+    closePromptPicker()
+    return
+  }
+  promptPosition.value = slashPosition()
+  // Some editor input transactions advance the caret in a separate update.
+  pendingPromptPosition = promptPosition.value === null ? slashPosition(1) : null
+  activePrompt.value = 0
+}
+
+function closePromptPicker() {
+  promptPosition.value = null
+  pendingPromptPosition = null
+}
+
+function insertPrompt(template) {
+  const editor = sender.value?.editor
+  const from = promptPosition.value
+  if (!editor || from === null || from !== slashPosition() || generating.value) {
+    closePromptPicker()
+    return
+  }
+  // Use the editor's plain-text transaction so Markdown and surrounding draft text stay editable.
+  editor.view.dispatch(editor.state.tr.insertText(template.content.replace(/\r\n?/g, '\n'), from, from + 1).scrollIntoView())
+  closePromptPicker()
+  editor.commands.focus()
+}
+
+function handlePromptKeys(event) {
+  if (!promptPickerVisible.value || event.isComposing) return
+  if (event.key === 'Escape') {
+    event.preventDefault()
+    event.stopPropagation()
+    closePromptPicker()
+  } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+    event.preventDefault()
+    event.stopPropagation()
+    const count = props.promptTemplates.length
+    if (!count) return
+    const step = event.key === 'ArrowDown' ? 1 : -1
+    activePrompt.value = (activePrompt.value + count + step) % count
+    nextTick(() => promptMenu.value?.querySelector('.is-active')?.scrollIntoView({ block: 'nearest' }))
+  } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    event.preventDefault()
+    event.stopPropagation()
+    const template = props.promptTemplates[activePrompt.value]
+    if (template) insertPrompt(template)
+  }
+}
+
+watch(() => sender.value?.editor, (editor, _, onCleanup) => {
+  if (!editor) return
+  const syncPromptSelection = () => {
+    const position = slashPosition()
+    if (position !== null && position === pendingPromptPosition && !generating.value) {
+      promptPosition.value = position
+    } else if (promptPosition.value !== null && position !== promptPosition.value) {
+      closePromptPicker()
+    }
+    pendingPromptPosition = null
+  }
+  editor.on('selectionUpdate', syncPromptSelection)
+  onCleanup(() => editor.off('selectionUpdate', syncPromptSelection))
+})
+watch(generating, closePromptPicker)
 const visibleMessages=computed(()=>props.messages.filter(msg=>String(msg?.content||'').trim()||msg?.sources?.length||msg?.report||msg?.ragMeta||msg?.trace?.length))
 const quickQuestions=computed(()=>props.suggestions.length?props.suggestions:['归纳资料中的关键条款','整理信息并列出待办事项'])
 const md=v=>DOMPurify.sanitize(marked.parse(String(v||''),{gfm:true,breaks:true,async:false}),{USE_PROFILES:{html:true}})
@@ -113,6 +208,7 @@ const handleCitationClick=event=>{
 const send = text => {
   const value = text.trim()
   if (!value || generating.value) return
+  closePromptPicker()
   emit('send-message', value)
   input.value = ''
 }
@@ -136,7 +232,12 @@ const needsRagReview=meta=>meta?.requiresReview||meta?.validation?.status==='nee
 const stringify=v=>Array.isArray(v)?v.map(x=>'- '+(typeof x==='object'?JSON.stringify(x):x)).join('\n'):typeof v==='object'?JSON.stringify(v,null,2):String(v||'未提供')
 const reportParts=r=>[['摘要',r.summary],['证据摘要',r.evidence||r.evidenceSummary],['不确定性',r.uncertainties],['危险信号',r.redFlags],['建议的下一步',r.nextSteps]].filter(x=>x[1]!=null&&x[1]!=='').map(x=>({title:x[0],value:stringify(x[1])}))
 const scroll=async()=>{await nextTick();if(scroller.value)scroller.value.scrollTop=scroller.value.scrollHeight}
-watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose({clearInput:()=>input.value=''})
+watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose({
+  clearInput: () => {
+    closePromptPicker()
+    input.value = ''
+  }
+})
 </script>
 <style scoped>
 .chat-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; color: var(--ink); background: var(--canvas); }
@@ -202,6 +303,34 @@ watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose(
 @media (prefers-reduced-motion: reduce) { .loading i { animation: none; } }
 
 footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - 840px) / 2)) 14px; }
+.composer-wrap { position: relative; }
+.prompt-menu {
+  position: absolute;
+  z-index: 3;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: min(100%, 440px);
+  max-height: min(240px, 42vh);
+  overflow-y: auto;
+  padding: 5px;
+}
+.prompt-loading { margin: 0; padding: 8px 10px; color: var(--muted); font-size: 13px; }
+.prompt-option {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.prompt-option.is-active, .prompt-option:focus-visible { background: var(--surface-muted); }
+.prompt-option small { color: var(--muted); }
 .composer {
   --tr-color-primary: var(--chat-accent);
   --tr-sender-box-shadow: var(--shadow);

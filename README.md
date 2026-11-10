@@ -20,6 +20,7 @@ Tian 是一个通用知识库和 AI Agent 工作台。用户可以按主题创�
 ```text
 Tian-AI-Agent-main/
 ├── tian-ai-agent-frontend/        Vue 3、Vite、TinyRobot、ECharts
+│   └── src-tauri/                Tauri 2 桌面应用和打包配置
 └── tian-ai-agent-backend/         Java 21、Spring Boot 3.5、Spring AI 1.0
     ├── tian-ai-agent-api/         HTTP 和 MCP 请求、响应契约
     ├── tian-ai-agent-app/         Spring Boot 启动类、Bean 装配与运行配置
@@ -30,23 +31,42 @@ Tian-AI-Agent-main/
     └── docs/                     MySQL 初始化脚本、Docker Compose 和使用说明
 ```
 
-领域模块按业务划分，每个业务域按需组织 `adapter`、`model` 和 `service`。MySQL 和 H2 使用 MyBatis-Plus，分别绑定各自的数据源。
+领域模块按业务划分，每个业务域按需组织 `adapter`、`model` 和 `service`。MySQL 和 SQLite 使用 MyBatis-Plus，分别绑定各自的数据源。
 
 | 存储 | 数据 |
 | --- | --- |
 | MySQL | 完整会话和消息、账号画像、模型配置、个人 MCP 配置、运行摘要 `agent_run` 和执行明细 `agent_request_log`。 |
-| H2 | 知识库空间、解析任务、文档和 Chunk 元数据。默认向量检索使用本地索引。 |
+| SQLite | 知识库空间、解析任务、文档和 Chunk 元数据。默认文件是后端的 data/knowledge.sqlite，本地向量也保存在该文件。 |
 | Milvus | 可配置为知识库向量后端。启用长期记忆后，压缩摘要及其向量写入独立集合，按账号和知识库范围召回。 |
 | Redis | 上传限流、RAG 语义缓存，以及可导入的旧版会话历史。 |
 | 文件系统或 OSS | 原始上传文件。解析后的 Markdown 和编译后的 Wiki 版本保存在配置的本地目录。 |
 
+## 开发环境
+
+| 部分 | 环境要求 |
+| --- | --- |
+| Java 后端 | JDK 21、Maven。后端使用 Spring Boot 3.5.13 和 Spring AI 1.0.0。 |
+| Web 和桌面前端 | Node.js 20 或更新版本、npm。使用 Vue 3 和 Vite 4，依赖版本由 `package-lock.json` 锁定。当前主机使用 Node.js 22.19.0 和 npm 10.9.3。 |
+| Windows 桌面开发和打包 | Tauri 2、Rust stable MSVC 工具链（项目声明 Rust 1.90 起）、Visual Studio C++ 桌面开发工作负载、Windows SDK 和 Microsoft Edge WebView2 Runtime。 |
+| 本地数据服务 | Docker Compose 启动 MySQL、Redis、Milvus、etcd 和 MinIO，SQLite 由后端在本地打开。 |
+
+后端构建前运行 `mvn -v`，确认 Maven 使用 Java 21。如果当前终端使用其他 JDK，可在 PowerShell 中为本次会话切换。下面的路径请替换为实际安装位置。
+
+```powershell
+$env:JAVA_HOME = 'C:\path\to\jdk-21'
+$env:Path = "$env:JAVA_HOME\bin;$env:Path"
+mvn -v
+```
+
+使用 rustup 安装 Rust 后，在 Windows x64 上运行 `rustup default stable-msvc`，并用 `rustc -vV` 确认 `host` 为 `x86_64-pc-windows-msvc`。Tauri CLI 随前端 npm 依赖安装。 [Tauri Windows 前置要求](https://v2.tauri.app/start/prerequisites/#windows)
+
 ## 本地启动
 
-准备 **JDK 21、Maven、Node.js、npm、MySQL 和 Docker Compose**。后端、前端和 MySQL 在本机运行，Compose 提供 Redis、Milvus、etcd 和 MinIO。
+Web 和桌面端共用同一个 Java 后端。先启动数据服务和后端，再选择一个前端开发命令。
 
 ### 1. 准备 MySQL 和 Docker 依赖
 
-先创建 MySQL 库 `tian_ai_agent`，授予应用账号建表和读写权限。后端启动会执行初始化脚本，旧版审计明细表存在时会迁移到 `agent_request_log)。也可以先选中目标库，再手动执行 [完整 SQL](tian-ai-agent-backend/docs/mysql/tian_ai_agent.sql)。
+Compose 首次初始化 MySQL 数据卷时创建 `tian_ai_agent` 库并设置 `root` 密码。后端启动后执行 [建表 SQL](tian-ai-agent-backend/docs/mysql/tian_ai_agent.sql)。已有项目库时，先把源库导入新容器并核对数据，再启动后端。 [MySQL 迁移说明](tian-ai-agent-backend/docs/mysql/README.md)
 
 在项目根目录打开 PowerShell，进入后端目录并准备 `.env`。
 
@@ -55,7 +75,7 @@ cd tian-ai-agent-backend
 if (!(Test-Path .env)) { Copy-Item docs/docker/.env.example .env }
 ```
 
-在后端根目录的 `.env` 填入本机的 `MYSQL_PASSWORD`。按需配置 `MINERU_TOKEN` 和 `SEARCH_API_KEY`。默认 MySQL 地址为 `127.0.0.1:3306`，库名和账号通过 `agent.persistence.mysql` 配置。[MySQL 配置说明](tian-ai-agent-backend/docs/mysql/README.md)
+在后端根目录的 `.env` 通过 `MYSQL_PASSWORD` 设置 MySQL root 密码，按需配置 `MINERU_TOKEN` 和 `SEARCH_API_KEY`。后端默认连接 `127.0.0.1:13306`，可通过 `MYSQL_PORT` 修改宿主机端口。
 
 ```powershell
 docker compose --env-file .env -f docs/docker/compose.yml up -d
@@ -63,6 +83,8 @@ docker compose --env-file .env -f docs/docker/compose.yml ps
 ```
 
 ### 2. 启动后端
+
+已有旧知识库的工作区可在首次启动新版前按[SQLite 迁移说明](tian-ai-agent-backend/docs/sqlite/README.md)迁移数据。
 
 在 [application.yml](tian-ai-agent-backend/tian-ai-agent-app/src/main/resources/application.yml) 的 `agent.access` 下配置访问令牌。管理员使用 `admin-token`，普通用户在 `users` 中配置 `id` 和 `token`，外部知识库 MCP 客户端可使用专用的 `mcp-token`。各令牌使用不同的值，长度至少 24 个可打印 ASCII 字符。
 
@@ -79,17 +101,45 @@ java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 - 健康检查为 `GET /api/health`。
 - Swagger UI 路径为 `/api/swagger-ui.html`。
 
-### 3. 启动前端
+### 3. 安装前端依赖
 
-从项目根目录另开一个终端启动前端。
+从项目根目录另开 PowerShell，进入前端目录。
 
 ```powershell
 cd tian-ai-agent-frontend
 npm ci
+```
+
+### 4. 启动 Web 端
+
+```powershell
 npm run dev
 ```
 
-打开 [本地工作台](http://localhost:3000)，点击「设置访问令牌」并填写后端配置中的令牌。Vite 默认把 `/api` 请求代理到 `127.0.0.1:8123`。开发代理和端口见 [vite.config.js](tian-ai-agent-frontend/vite.config.js)。
+打开 [本地工作台](http://localhost:3000)。Vite 将同源 `/api` 请求代理到 `http://127.0.0.1:8123`。如果要直接连接另一个后端，在前端的 `.env.local` 中设置 `VITE_API_BASE_URL`。 [Vite 配置](tian-ai-agent-frontend/vite.config.js)
+
+### 5. 启动 Windows 桌面端
+
+```powershell
+npm run tauri -- dev
+```
+
+Tauri 会在 `127.0.0.1:3000` 启动 Vite，并打开桌面窗口。如果已运行 `npm run dev`，先用 `Ctrl+C` 停止该实例。需要同时查看浏览器和桌面窗口时，运行上面的 Tauri 命令，再在浏览器打开 [同一个开发地址](http://127.0.0.1:3000)。
+
+Web 端在右上角「设置访问令牌」中填写步骤 2 配置的令牌。桌面端首次启动时填写后端 API 地址和访问令牌，通过验证后进入工作台。两端都可以在「模型设置」配置个人模型。
+
+## 构建 Web 和桌面端
+
+在 `tian-ai-agent-frontend` 中执行对应的构建命令。
+
+| 目标 | 命令 | 产物 |
+| --- | --- | --- |
+| Web 静态文件 | `npm run build` | `dist/`，部署时由 Web 服务器转发 `/api`，项目提供 [Nginx 示例](tian-ai-agent-frontend/nginx.conf)。 |
+| Windows NSIS 安装包 | `npm run tauri -- build --bundles nsis` | 桌面静态文件位于 `dist-desktop/`，安装包位于 `src-tauri/target/release/bundle/nsis/`。 |
+
+安装包可分发给多个用户。后端管理员应部署用户可访问的 Java 服务，并为每个用户分配独立的工作台令牌。用户首次打开桌面端时输入后端地址（例如 `https://agent.example.com/api`）和工作台令牌，验证通过后在「模型设置」填写个人模型名称和 API Key。后端地址会保留在本机，访问令牌随窗口会话保存。可在右上角「访问配置」切换后端。远程服务需允许桌面 WebView 的跨域请求。
+
+如需为安装包预填后端地址，可以在打包前通过 `.env.desktop.local` 设置 `VITE_DESKTOP_API_BASE_URL`，用户仍可在客户端修改。
 
 ## 配置模型和 MCP
 

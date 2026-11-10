@@ -28,6 +28,25 @@ npm run build
 
 Nginx 配置包含适用于 POST SSE 的关闭缓冲与长连接设置。
 
+## Windows 桌面端
+
+桌面端共用 Vue 页面和 Java API。启动 Java 后端后，在本目录运行以下命令，Tauri 会启动端口 3000 上的 Vite。若已有 Web 开发服务占用该端口，先停止该实例。
+
+### 调试和打包
+
+~~~powershell
+npm run tauri -- dev
+npm run tauri -- build --bundles nsis
+~~~
+
+桌面前端输出到 dist-desktop，Windows 安装包默认生成在 src-tauri/target/release/bundle/nsis。Web 构建仍输出到 dist。
+
+### 后端连接
+
+首次打开桌面端时，输入管理员提供的后端 API 地址和工作台访问令牌，点击「验证并连接」。连接成功后，可以在「模型设置」保存个人模型和 API Key。后端地址会保留在本机，访问令牌随窗口会话保存。通过右上角「访问配置」可切换后端。
+
+用户必须能够访问所填的 Java 后端。跨网络使用时采用可访问的 HTTPS 地址，例如 `https://agent.example.com/api`。可通过 `.env.desktop.local` 中的 `VITE_DESKTOP_API_BASE_URL` 为安装包预填地址。
+
 ## 医疗安全约束
 
 - 任意页面持续展示“不能替代专业诊疗与急救”的安全边界。

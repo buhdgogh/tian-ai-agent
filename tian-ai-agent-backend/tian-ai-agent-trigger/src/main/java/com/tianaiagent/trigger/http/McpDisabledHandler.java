@@ -1,5 +1,6 @@
 package com.tianaiagent.trigger.http;
 
+import com.tianaiagent.domain.knowledge.service.SpaceEmbeddings;
 import com.tianaiagent.types.exception.McpDisabledException;
 import com.tianaiagent.types.exception.ModelUnavailableException;
 import org.springframework.http.HttpStatus;
@@ -16,6 +17,12 @@ class McpDisabledHandler {
     @ResponseStatus(HttpStatus.BAD_REQUEST)
     Map<String, String> invalidRequest(IllegalArgumentException error) {
         return Map.of("code", "INVALID_ARGUMENT", "message", "请求参数无效");
+    }
+
+    @ExceptionHandler(SpaceEmbeddings.Unavailable.class)
+    @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+    Map<String, String> embeddingUnavailable(SpaceEmbeddings.Unavailable error) {
+        return Map.of("code", "EMBEDDING_UNAVAILABLE", "message", error.getMessage());
     }
 
     @ExceptionHandler(ModelUnavailableException.class)

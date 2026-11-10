@@ -7,6 +7,8 @@ import com.tianaiagent.domain.medical.service.MedicalAdvisorService;
 import com.tianaiagent.domain.agent.service.MedicalDispatchService;
 import com.tianaiagent.domain.agent.service.AgentRunAudit;
 import com.tianaiagent.domain.agent.service.AgentRunContext;
+import com.tianaiagent.domain.agent.service.AgentPresetService;
+import com.tianaiagent.domain.agent.service.LocalWorkspaceReads;
 import com.tianaiagent.domain.medical.service.MedicalAgentService;
 import com.tianaiagent.domain.conversation.service.ConversationScope;
 import com.tianaiagent.domain.conversation.adapter.port.ConversationMemoryRegistry;
@@ -18,6 +20,8 @@ import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.http.MediaType;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
@@ -26,6 +30,7 @@ import reactor.core.publisher.Flux;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /** 知识工作台对话、任务分发及兼容的医疗接口。 */
 @RestController
@@ -42,6 +47,8 @@ public class AiController {
     @Resource private AgentRunAudit runAudit;
     @Resource(name = "agentStreamExecutor") private AsyncTaskExecutor agentStreamExecutor;
     @Resource private ConversationMemoryRegistry memoryRegistry;
+    @Resource private AgentPresetService presets;
+    @Resource private LocalWorkspaceReads localWorkspaces;
 
     @GetMapping("/sessions")
     public List<ConversationSummary> listSessions(
@@ -121,16 +128,17 @@ public class AiController {
     public SseEmitter workspaceAgent(@RequestBody ChatRequest request, @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         WorkspaceConversation conversation = workspaceConversation(request, identity);
         return streamAgent(request.message(), identity.ownerId(), conversation.chatId(), conversation.spaceId(),
-                conversation.medical(), request.modelProviderId());
+                conversation.medical(), request.modelProviderId(), presets.selectedSkillInstructions(identity.ownerId(), request.skillIds()));
     }
 
     @PostMapping("/dispatch")
     public Object workspaceDispatch(@RequestBody ChatRequest request, @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         WorkspaceConversation conversation = workspaceConversation(request, identity);
+        String skillInstructions = presets.selectedSkillInstructions(identity.ownerId(), request.skillIds());
         return runAudit.call(identity.ownerId(), "DISPATCH", request.modelProviderId(), () -> {
             memoryRegistry.touch(ConversationMemoryRegistry.MEDICAL_AGENT, conversation.chatId());
             var result = new LinkedHashMap<>(dispatchService.dispatch(request.message(), conversation.chatId(),
-                    identity.ownerId(), conversation.spaceId(), conversation.medical()));
+                    identity.ownerId(), conversation.spaceId(), conversation.medical(), skillInstructions));
             result.put("runId", AgentRunContext.current().id());
             return result;
         });
@@ -140,17 +148,21 @@ public class AiController {
     public SseEmitter workspaceDispatchStream(@RequestBody ChatRequest request,
             @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity, HttpServletResponse response) {
         WorkspaceConversation conversation = workspaceConversation(request, identity);
+        String skillInstructions = presets.selectedSkillInstructions(identity.ownerId(), request.skillIds());
         response.setHeader("Cache-Control", "no-cache");
         response.setHeader("X-Accel-Buffering", "no");
         var run = runAudit.start(identity.ownerId(), "DISPATCH", null, request.modelProviderId());
-        var output = new SseDispatchOutput(run);
+        var output = new SseDispatchOutput(run, () -> {
+            if (request.localWorkspace()) localWorkspaces.close(run.id());
+        });
+        if (request.localWorkspace()) localWorkspaces.open(run.id(), identity.ownerId(), output::workspaceRequest);
         try {
             output.attach(agentStreamExecutor.submit(() -> AgentRunContext.within(run, () -> {
                 try {
                     output.started();
                     memoryRegistry.touch(ConversationMemoryRegistry.MEDICAL_AGENT, conversation.chatId());
                     dispatchService.stream(request.message(), conversation.chatId(), identity.ownerId(),
-                            conversation.spaceId(), conversation.medical(), output);
+                            conversation.spaceId(), conversation.medical(), output, skillInstructions, request.localWorkspace());
                     output.complete();
                 } catch (RuntimeException e) {
                     output.fail(e);
@@ -161,6 +173,17 @@ public class AiController {
             output.fail(e);
         }
         return output.emitter();
+    }
+
+    @PostMapping("/local-workspace/{runId}/results/{requestId}")
+    public ResponseEntity<Void> workspaceResult(@PathVariable String runId, @PathVariable String requestId,
+            @RequestBody JsonNode result, @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
+        try {
+            return localWorkspaces.reply(identity.ownerId(), runId, requestId, result)
+                    ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).build();
+        }
     }
 
     @PostMapping("/medical/chat")
@@ -212,16 +235,16 @@ public class AiController {
         request.validate();
         String spaceId = selectedSpace(request.spaceId());
         return streamAgent(request.message(), identity.ownerId(),
-                ConversationScope.storageId(identity.ownerId(), request.chatId(), spaceId), spaceId, true, null);
+                ConversationScope.storageId(identity.ownerId(), request.chatId(), spaceId), spaceId, true, null, "");
     }
 
     private SseEmitter streamAgent(String message, String ownerId, String chatId, String spaceId, boolean medical,
-                                 String modelProviderId) {
+                                 String modelProviderId, String skillInstructions) {
         var run = runAudit.start(ownerId, "REACT", null, modelProviderId);
         var output = new SseAgentOutput(run);
         try {
             return AgentRunContext.within(run, () -> {
-                agentService.streamChat(message, chatId, spaceId, output, medical);
+                agentService.streamChat(message, chatId, spaceId, output, medical, skillInstructions);
                 return output.emitter();
             });
         } catch (RuntimeException | Error e) {
@@ -238,6 +261,12 @@ public class AiController {
         return runAudit.call(identity.ownerId(), "DISPATCH", () ->
                 dispatchService.dispatch(request.message(), ConversationScope.storageId(identity.ownerId(), request.chatId(), spaceId),
                         identity.ownerId(), spaceId));
+    }
+
+    @ExceptionHandler(AgentPresetService.InvalidSkillSelection.class)
+    public ResponseEntity<Map<String, String>> invalidSkillSelection(AgentPresetService.InvalidSkillSelection error) {
+        return ResponseEntity.badRequest().contentType(MediaType.APPLICATION_JSON)
+                .body(Map.of("message", error.getMessage()));
     }
 
     private String sessionScope(String spaceId, boolean workspace) {

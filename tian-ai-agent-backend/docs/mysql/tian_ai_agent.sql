@@ -71,6 +71,25 @@ CREATE TABLE IF NOT EXISTS agent_mcp_server (
     PRIMARY KEY (owner_id, server_id)
 ) ENGINE = InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
+-- 按账号保存 Skill 和 Prompt 模板。
+CREATE TABLE IF NOT EXISTS agent_tool_credential (
+    owner_id VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    tool VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    ciphertext BLOB NOT NULL,
+    PRIMARY KEY (owner_id, tool)
+) ENGINE = InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
+CREATE TABLE IF NOT EXISTS agent_preset (
+    owner_id VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    preset_kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    preset_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+    name VARCHAR(100) NOT NULL,
+    description VARCHAR(500) NOT NULL,
+    content MEDIUMTEXT NOT NULL,
+    enabled BOOLEAN NOT NULL,
+    PRIMARY KEY (owner_id, preset_kind, preset_id)
+) ENGINE = InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+
 -- Agent 运行链路与模型调用审计
 CREATE TABLE IF NOT EXISTS agent_run (
     id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,

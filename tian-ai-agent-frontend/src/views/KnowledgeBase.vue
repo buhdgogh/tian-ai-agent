@@ -13,6 +13,7 @@
         </RouterLink>
         <button v-if="selectedSpace && selected !== 'medical'" class="ui-button danger" type="button"
           :disabled="busy" @click="openDeleteSpace">{{ selectedSpace.deleting ? '重试删除' : '删除知识库' }}</button>
+        <span v-if="selectedSpace">嵌入模型 · {{ selectedSpace.embeddingModel || '后端默认' }}<template v-if="selectedSpace.embeddingDimensions">（{{ selectedSpace.embeddingDimensions }} 维）</template></span>
       </div>
     </header>
 
@@ -81,7 +82,21 @@
             <select v-model="medicalSpace" class="ui-field" aria-label="知识库类型">
               <option :value="false">通用</option><option :value="true">医疗</option>
             </select>
-            <button class="ui-button" :disabled="busy">创建</button>
+            <label class="embedding-field">向量嵌入模型
+              <select v-model="embeddingProviderId" class="ui-field" :disabled="embeddingLoading">
+                <option value="">后端默认</option>
+                <option v-for="model in embeddingProviders" :key="model.id" :value="model.id">{{ model.model }} · {{ model.id }}</option>
+              </select>
+            </label>
+            <p class="hint embedding-field">
+              <template v-if="embeddingLoading">正在加载个人嵌入模型…</template>
+              <template v-else-if="embeddingError">加载嵌入模型失败。<button type="button" class="ui-button" @click="loadEmbeddingProviders">重试</button></template>
+              <template v-else>
+                <RouterLink to="/model-settings">配置个人嵌入模型</RouterLink>
+                <span v-if="embeddingProviderId"> · 此知识库的文档入库和检索将使用该模型的 API Key。模型在创建时绑定。</span>
+              </template>
+            </p>
+            <button class="ui-button" :disabled="busy || embeddingLoading">创建</button>
           </form>
         </details>
       </div>
@@ -112,7 +127,7 @@
 
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { createKnowledgeSpace, deleteKnowledgeFile, deleteKnowledgeSpace, getKnowledgeFiles, getKnowledgeSpaces, uploadKnowledgeFile } from '../api'
+import { createKnowledgeSpace, deleteKnowledgeFile, deleteKnowledgeSpace, getKnowledgeFiles, getKnowledgeSpaces, getModelProviders, uploadKnowledgeFile } from '../api'
 import WorkspaceIcon from '../components/WorkspaceIcon.vue'
 import { apiError } from '../utils/medical'
 
@@ -130,6 +145,10 @@ const files = ref([])
 const busy = ref(false)
 const name = ref('')
 const medicalSpace = ref(false)
+const embeddingProviderId = ref('')
+const embeddingProviders = ref([])
+const embeddingLoading = ref(false)
+const embeddingError = ref(false)
 const approved = ref(false)
 const error = ref('')
 const notice = ref('')
@@ -165,12 +184,26 @@ async function loadFiles() {
   }
 }
 
+async function loadEmbeddingProviders() {
+  embeddingLoading.value = true
+  embeddingError.value = false
+  try {
+    const { data } = await getModelProviders()
+    embeddingProviders.value = data.providers.filter(model =>
+      model.protocol === 'OPENAI_EMBEDDING' && model.enabled && model.hasApiKey)
+  } catch {
+    embeddingError.value = true
+  } finally {
+    embeddingLoading.value = false
+  }
+}
+
 async function create() {
-  if (busy.value || !name.value) return
+  if (busy.value || embeddingLoading.value || !name.value) return
   busy.value = true
   error.value = ''
   try {
-    const { data } = await createKnowledgeSpace(name.value, medicalSpace.value)
+    const { data } = await createKnowledgeSpace(name.value, medicalSpace.value, embeddingProviderId.value || undefined)
     spaces.value.push(data)
     emit('space-created', data)
     selected.value = data.id
@@ -316,6 +349,7 @@ watch(selected, () => {
 }, { immediate: true })
 
 onMounted(async () => {
+  loadEmbeddingProviders()
   timer = setInterval(() => { if (files.value.some(file => pending.has(file.status))) loadFiles() }, 2500)
   try {
     const { data } = await getKnowledgeSpaces()
@@ -369,6 +403,8 @@ fieldset .approved { grid-column:1 / -1; display:flex; align-items:center; gap:6
 .create summary { color:var(--accent-ink); font-weight:650; }
 .create form { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .create form input { flex:1 1 130px; }
+.embedding-field { flex: 1 0 100%; }
+label.embedding-field { display: grid; gap: 4px; color: var(--muted); font-size: 13px; }
 .library-header { justify-content:space-between; }
 .search { width:100%; margin-top:12px; }
 .empty { padding:45px 10px; color:var(--muted); text-align:center; }

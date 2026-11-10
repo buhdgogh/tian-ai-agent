@@ -9,6 +9,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.BiFunction;
 import java.util.function.Predicate;
@@ -33,6 +34,13 @@ public class ModelProviderSettingsService {
     public synchronized Settings list(String owner) {
         List<View> rows = providers.getOrDefault(owner, List.of()).stream().map(View::from).toList();
         return new Settings(version(owner), rows);
+    }
+
+    public synchronized Optional<ModelProvider> embeddingProvider(String owner, String id) {
+        return providers.getOrDefault(owner, List.of()).stream()
+                .filter(item -> item.id().equals(id) && item.enabled()
+                        && item.protocol() == ModelProvider.Protocol.OPENAI_EMBEDDING && allowed.test(item))
+                .findFirst();
     }
 
     public synchronized Settings save(String owner, String expectedVersion, List<ModelProvider> requested) {

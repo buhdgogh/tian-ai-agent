@@ -7,15 +7,21 @@ import org.apache.ibatis.type.JdbcType;
 import org.mybatis.spring.SqlSessionTemplate;
 
 import javax.sql.DataSource;
+import java.util.function.Consumer;
 
 public final class MybatisSessions {
     private MybatisSessions() {}
 
     public static SqlSessionTemplate create(DataSource dataSource, Class<?>... mappers) {
+        return create(dataSource, configuration -> {}, mappers);
+    }
+
+    public static SqlSessionTemplate create(DataSource dataSource, Consumer<MybatisConfiguration> customize, Class<?>... mappers) {
         var configuration = new MybatisConfiguration();
         configuration.setMapUnderscoreToCamelCase(true);
         configuration.setArgNameBasedConstructorAutoMapping(true);
         configuration.setJdbcTypeForNull(JdbcType.NULL);
+        customize.accept(configuration);
 
         var factory = new MybatisSqlSessionFactoryBean();
         factory.setDataSource(dataSource);
