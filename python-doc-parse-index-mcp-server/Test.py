@@ -1,7 +1,7 @@
 from mineru.client import MinerU
 
 # 1. 初始化客户端
-client = MinerU("sk-wlVw6TAB0e3xswb7AhvPGBsc15yM0c3Z8zwOihRKSSOH7c2s")
+client = MinerU("")
 
 # 2. 提交解析任务（参数名改为 model）
 result = client.extract(
