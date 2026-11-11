@@ -84,7 +84,7 @@ spring:
       max-request-size: 200MB
   ai:
     dashscope:
-      api-key: sk-ws-H.EDDMLMP.Awxr.MEUCIQCA7D8iAOKLZX1GJ7Uhc4WrJJroPjvoBeC3nhWEvep5DAIgK7zIalKnr83XLZTD3p-XV84OnszBD2Tl1kgPIk4GLIs
+      api-key: 
       chat:
         options:
           model: qwen-plus
