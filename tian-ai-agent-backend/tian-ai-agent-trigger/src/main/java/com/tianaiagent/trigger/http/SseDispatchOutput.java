@@ -42,6 +42,7 @@ final class SseDispatchOutput implements MedicalDispatchService.Output {
     void started() { send("run", Map.of("runId", run.id())); }
     @Override public void route(MedicalIntentRouter.RoutingDecision decision) { send("route", decision); }
     @Override public void workflow(TaskRecord task) { send("task", task); }
+    @Override public void thinking(int step) { send("thinking", Map.of("step", step)); }
     @Override public void delta(String text) { send("delta", Map.of("text", text)); }
     @Override public void tools(List<String> names) { send("tools", Map.of("names", names)); }
     void workspaceRequest(LocalWorkspaceReads.Request request) { send("workspace_request", request); }

@@ -7,7 +7,7 @@ import org.apache.ibatis.annotations.Select;
 
 public interface ToolCredentialMapper {
     @Select("SELECT ciphertext FROM agent_tool_credential WHERE owner_id=#{ownerId} AND tool=#{tool}")
-    byte[] find(@Param("ownerId") String ownerId, @Param("tool") String tool);
+    CiphertextRow find(@Param("ownerId") String ownerId, @Param("tool") String tool);
 
     @Insert("""
             INSERT INTO agent_tool_credential(owner_id, tool, ciphertext)
@@ -18,4 +18,6 @@ public interface ToolCredentialMapper {
 
     @Delete("DELETE FROM agent_tool_credential WHERE owner_id=#{ownerId} AND tool=#{tool}")
     void delete(@Param("ownerId") String ownerId, @Param("tool") String tool);
+
+    record CiphertextRow(byte[] ciphertext) {}
 }

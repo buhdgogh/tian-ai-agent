@@ -18,7 +18,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.model.Generation;
-import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
@@ -44,7 +43,7 @@ import java.util.stream.Collectors;
 @Slf4j
 public class ToolCallAgent extends ReActAgent {
     // 可用的工具
-    private final ToolCallback[] availableTools;
+    private final ToolSearchSession toolSearch;
 
     // 保存工具调用信息的响应结果（要调用那些工具）
     private ChatResponse toolCallChatResponse;
@@ -57,22 +56,35 @@ public class ToolCallAgent extends ReActAgent {
     private final Set<String> parallelSafeTools;
 
     // 禁用 Spring AI 内置的工具调用机制，自己维护选项和消息上下文
-    private final ChatOptions chatOptions;
     private String skillInstructions = "";
+    private boolean stopOnTerminate = true;
 
     public ToolCallAgent(ToolCallback[] availableTools,
                          AsyncTaskExecutor parallelToolCallExecutor,
                          Set<String> parallelSafeTools) {
         super();
-        this.availableTools = availableTools;
+        this.toolSearch = new ToolSearchSession(availableTools);
         this.toolCallingManager = ToolCallingManager.builder().build();
         this.parallelToolCallExecutor = parallelToolCallExecutor;
         this.parallelSafeTools = Set.copyOf(parallelSafeTools);
-        // 模型请求和手动执行共享同一份工具定义，关闭模型适配器的自动执行。
-        this.chatOptions = ToolCallingChatOptions.builder()
-                .toolCallbacks(availableTools)
+    }
+
+    private ToolCallingChatOptions chatOptions() {
+        return ToolCallingChatOptions.builder()
+                .toolCallbacks(toolSearch.callbacks())
                 .internalToolExecutionEnabled(false)
                 .build();
+    }
+
+    public String runFinalAnswer(String userPrompt) {
+        stopOnTerminate = false;
+        run(userPrompt, this::step, true);
+        return getMessageList().reversed().stream()
+                .takeWhile(message -> !(message instanceof UserMessage))
+                .filter(AssistantMessage.class::isInstance)
+                .map(Message::getText)
+                .filter(StrUtil::isNotBlank)
+                .findFirst().orElse("");
     }
 
     // 是否需要继续执行行动
@@ -104,6 +116,7 @@ public class ToolCallAgent extends ReActAgent {
 
     public void runWithDeltas(String userPrompt, AgentAnswerOutput output) {
         run(userPrompt, () -> {
+            output.thinking(getCurrentStep());
             var text = new StringBuilder();
             var calls = new LinkedHashMap<String, AssistantMessage.ToolCall>();
             var metadata = new LinkedHashMap<String, Object>();
@@ -141,6 +154,7 @@ public class ToolCallAgent extends ReActAgent {
         if (StrUtil.isNotBlank(getNextStepPrompt())) {
             systemPrompt += "\n\n" + getNextStepPrompt();
         }
+        systemPrompt += "\n\n" + ToolSearchSession.INSTRUCTIONS;
         List<Message> messageList = new ArrayList<>();
         if (StrUtil.isNotBlank(systemPrompt)) messageList.add(new SystemMessage(systemPrompt));
         messageList.addAll(this.getMessageList());
@@ -153,7 +167,7 @@ public class ToolCallAgent extends ReActAgent {
                 }
             }
         }
-        Prompt prompt = new Prompt(messageList, this.chatOptions);
+        Prompt prompt = new Prompt(messageList, chatOptions());
         return getChatClient().prompt(prompt);
     }
 
@@ -199,18 +213,25 @@ public class ToolCallAgent extends ReActAgent {
         }
 
         // 调用工具
-        Prompt prompt = new Prompt(getMessageList(), this.chatOptions);
+        ToolCallingChatOptions options = chatOptions();
+        Prompt prompt = new Prompt(getMessageList(), options);
         List<AssistantMessage.ToolCall> toolCalls = toolCallChatResponse.getResult().getOutput().getToolCalls();
-        ToolExecutionResult toolExecutionResult = executeToolCalls(
-                prompt, toolCallChatResponse.getResult().getOutput(), toolCalls);
+        AssistantMessage assistantMessage = toolCallChatResponse.getResult().getOutput();
+        ToolExecutionResult toolExecutionResult;
+        if (toolCalls.stream().anyMatch(call -> options.getToolCallbacks().stream()
+                .noneMatch(callback -> callback.getToolDefinition().name().equals(call.name())))) {
+            toolExecutionResult = dependencyErrorResult(prompt, assistantMessage, "请先用 toolSearchTool 查找并加载工具");
+        } else {
+            toolExecutionResult = executeToolCalls(prompt, assistantMessage, toolCalls);
+        }
         // 记录消息上下文，conversationHistory 已经包含了助手消息和工具调用返回的结果
         setMessageList(toolExecutionResult.conversationHistory());
         ToolResponseMessage toolResponseMessage = (ToolResponseMessage) CollUtil.getLast(toolExecutionResult.conversationHistory());
 
         // 判断是否调用了终止工具
         boolean terminateToolCalled = toolResponseMessage.getResponses().stream()
-                .anyMatch(response -> response.name().equals("doTerminate"));
-        if (terminateToolCalled) {
+                .anyMatch(response -> response.name().equals("doTerminate") && !isFailedResult(response.responseData()));
+        if (stopOnTerminate && terminateToolCalled) {
             // 任务结束，更改状态
             setState(AgentState.FINISHED);
         }
@@ -249,7 +270,7 @@ public class ToolCallAgent extends ReActAgent {
                                                      ToolDependencyGraph graph) {
         ToolContext toolContext = buildToolContext(prompt);
         List<ResolvedToolCall> resolvedCalls = assistantMessage.getToolCalls().stream()
-                .map(call -> new ResolvedToolCall(call, resolveTool(call.name())))
+                .map(call -> new ResolvedToolCall(call, resolveTool(prompt, call.name())))
                 .toList();
         Map<Integer, ToolResponseMessage.ToolResponse> completedResponses = new LinkedHashMap<>();
         Map<Integer, String> completedResults = new HashMap<>();
@@ -365,8 +386,8 @@ public class ToolCallAgent extends ReActAgent {
                 resolved.call().id(), resolved.call().name(), result == null ? "" : result);
     }
 
-    private ToolCallback resolveTool(String toolName) {
-        return java.util.Arrays.stream(availableTools)
+    private ToolCallback resolveTool(Prompt prompt, String toolName) {
+        return ((ToolCallingChatOptions) prompt.getOptions()).getToolCallbacks().stream()
                 .filter(callback -> callback.getToolDefinition().name().equals(toolName))
                 .findFirst()
                 .orElseThrow(() -> new IllegalStateException("No ToolCallback found for tool: " + toolName));

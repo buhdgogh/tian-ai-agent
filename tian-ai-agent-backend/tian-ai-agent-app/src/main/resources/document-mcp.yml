@@ -18,7 +18,8 @@ doc-mcp:
   hybrid-keyword-weight: 0.35
   mmr-relevance-weight: 0.78
   max-candidates-per-document: 4
-  vector-store: local
+  # 知识库向量索引及长期记忆共用此配置，可选 sqlite 或 milvus。
+  vector-store: sqlite
   milvus:
     uri: http://127.0.0.1:19530
     token: root:Milvus

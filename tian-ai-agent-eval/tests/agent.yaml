@@ -1,0 +1,45 @@
+- description: AGENT-01 通用工具清单
+  vars:
+    question: '列出当前可用工具'
+    expectedIntents: [TOOL_INVENTORY]
+    expectedWorkflow: false
+  assert:
+    - type: javascript
+      metric: tool_inventory_rule
+      value: 'output.route.strategy === "KEYWORD"'
+    - type: javascript
+      metric: tool_inventory_answer
+      value: 'output.answer.includes("内置工具") && output.answer.includes("个人 MCP 工具")'
+
+- description: AGENT-02 仅查看个人 MCP 工具
+  vars:
+    question: '请列出当前可用的 MCP 工具'
+    expectedIntents: [MCP_TOOL_INVENTORY]
+    expectedWorkflow: false
+  assert:
+    - type: javascript
+      metric: tool_inventory_rule
+      value: 'output.route.strategy === "KEYWORD"'
+    - type: javascript
+      metric: mcp_inventory_scope
+      value: 'output.answer.includes("个人 MCP 工具") && !output.answer.includes("### 内置工具")'
+
+- description: AGENT-03 编程概念问答直接返回
+  vars:
+    question: '请用一句话解释 Java 中的接口有什么用途。'
+    expectedIntents: [OTHER]
+    expectedWorkflow: false
+  assert:
+    - type: javascript
+      metric: direct_answer
+      value: 'output.answer.trim().length > 0 && !output.taskId'
+
+- description: AGENT-04 文档处理与报告编写走工作流
+  vars:
+    question: '请分别完成两个独立任务。第一，说明如何把一份 PDF 文档解析并入库。第二，为虚构的北辰项目生成一份进度报告模板。这两个任务独立交付，只需在聊天中提供文本。'
+    expectedIntents: [DOCUMENT_PROCESSING, REPORT_GENERATION]
+    expectedWorkflow: true
+  assert:
+    - type: javascript
+      metric: workflow_task_submitted
+      value: 'typeof output.taskId === "string" && output.taskId.length > 0'

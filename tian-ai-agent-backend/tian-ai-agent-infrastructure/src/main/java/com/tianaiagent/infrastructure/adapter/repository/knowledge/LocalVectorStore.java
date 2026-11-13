@@ -6,13 +6,11 @@ import com.tianaiagent.infrastructure.gateway.model.EmbeddingService;
 
 import com.tianaiagent.domain.knowledge.model.entity.ChunkRecord;
 import com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.util.List;
 import java.util.Comparator;
 
 /** 默认单机实现：向量保存在 SQLite，检索时在 JVM 中计算余弦相似度。 */
-@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "local", matchIfMissing = true)
 public class LocalVectorStore implements VectorStore, MemoryVectorStorage {
     private final MybatisKnowledgeRepository repository;
 

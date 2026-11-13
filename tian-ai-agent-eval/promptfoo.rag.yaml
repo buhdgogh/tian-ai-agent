@@ -1,0 +1,29 @@
+# yaml-language-server: $schema=https://www.promptfoo.dev/config-schema.json
+description: Tian 知识工作台 RAG 答案和证据回归
+
+prompts:
+  - '{{question}}'
+
+providers:
+  - id: file://./tian-provider.cjs
+    label: Tian 知识库问答
+    config:
+      mode: rag
+
+defaultTest:
+  options:
+    disableVarExpansion: true
+  assert:
+    - type: javascript
+      metric: answer_facts_complete
+      value: 'context.vars.expectedEvidence.every(({ fact }) => output.answer.includes(fact))'
+    - type: javascript
+      metric: expected_evidence_complete
+      value: |-
+        return context.vars.expectedEvidence.every(({ fileName, fact }) =>
+          output.sources.some(source =>
+            source.fileName === fileName
+            && typeof source.documentId === 'string' && source.documentId.length > 0
+            && typeof source.text === 'string' && source.text.includes(fact)));
+
+tests: file://./tests/rag.json

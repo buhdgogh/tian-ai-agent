@@ -33,7 +33,6 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -43,7 +42,6 @@ import java.util.Map;
 import java.util.Set;
 
 /** Milvus 叶子 Chunk 向量存储，实现文档级增量覆盖和向量候选召回。 */
-@ConditionalOnProperty(prefix = "doc-mcp", name = "vector-store", havingValue = "milvus")
 public class MilvusVectorStore implements VectorStore {
     private static final Logger log = LoggerFactory.getLogger(MilvusVectorStore.class);
     private static final String NODE_ID = "node_id";
@@ -76,7 +74,7 @@ public class MilvusVectorStore implements VectorStore {
     void initialize() {
         DocMcpProperties.Milvus config = properties.getMilvus();
         if (config.getUri() == null || config.getUri().isBlank()) {
-            throw new IllegalStateException("VECTOR_STORE=milvus 时必须配置 MILVUS_URI");
+            throw new IllegalStateException("选择 Milvus 时必须配置 doc-mcp.milvus.uri");
         }
         var builder = ConnectConfig.builder().uri(config.getUri());
         if (config.getToken() != null && !config.getToken().isBlank()) builder.token(config.getToken());

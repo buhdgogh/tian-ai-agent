@@ -6,7 +6,7 @@ Spring Boot 在 Windows 本机运行，MySQL 由 [Docker Compose](../docker/comp
 
 [`tian_ai_agent.sql`](tian_ai_agent.sql) 是完整的 MySQL 初始化脚本，包含会话、消息、个人模型配置、运行审计、用户画像和旧版摘要兼容表。可在选中目标库后手动执行整份脚本。
 
-容器首次初始化数据卷时会创建目标库并设置 `root` 密码。已有数据卷的密码需在 MySQL 内修改，再同步 `.env`。后端启动时会执行建表脚本，并尝试导入可读取的旧会话历史。MySQL 连接或鉴权失败时，启动会报错。IDEA 中的 `local` 活动配置额外启用 Milvus 长期记忆。
+容器首次初始化数据卷时会创建目标库并设置 `root` 密码。已有数据卷的密码需在 MySQL 内修改，再同步 `.env`。后端启动时会执行建表脚本，并尝试导入可读取的旧会话历史。MySQL 连接或鉴权失败时，启动会报错。IDEA 中的 `local` 活动配置额外启用长期记忆，默认写入 SQLite。
 
 后端在宿主机运行时，`MYSQL_ROOT_HOST` 使用 Docker 网关的具体 IP。可以用 `docker network inspect tian-ai-agent_default` 查看网关。已有数据卷需在 MySQL 中为该来源配置 `root` 登录权限。
 

@@ -93,7 +93,7 @@ docker compose --env-file .env -f docs/docker/compose.yml ps
 java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p.log' -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar --spring.profiles.active=local
 ```
 
-默认配置使用 `127.0.0.1:13306` 的 MySQL 持久化会话，并连接 `127.0.0.1:6379` 的 Redis。`local` 额外启用 `127.0.0.1:19530` 的 Milvus 长期记忆。MySQL 宿主机端口由 `MYSQL_PORT` 统一设置。修改 Redis 或 Milvus 端口后，请同步更新 [本地配置](tian-ai-agent-app/src/main/resources/application-local.yml)。
+默认配置使用 `127.0.0.1:13306` 的 MySQL 持久化会话，并连接 `127.0.0.1:6379` 的 Redis。`local` 额外启用长期记忆，默认写入 SQLite。MySQL 宿主机端口由 `MYSQL_PORT` 统一设置。修改 Redis 或 Milvus 端口后，请同步更新 [本地配置](tian-ai-agent-app/src/main/resources/application-local.yml)。
 
 后端健康检查位于 `http://localhost:8123/api/health`。Milvus WebUI 位于 `http://localhost:9091/webui/`，MinIO Console 位于 `http://localhost:9001`。旧版 Compose 的 `admin` 或 `mysql` 容器如仍在运行，可单独停止并保留原数据卷。
 
@@ -216,7 +216,7 @@ SQLite 按空间存储和查询文档及片段，Milvus 在选定分区内召回
 
 主应用不在启动阶段构建内存向量库；MinerU 解析结果由 Java 文档 MCP 完成 `4096/1024/256` 分层切片、Embedding、Milvus/关键词召回和 MMR 重排。
 
-完整会话和账号画像默认写入 MySQL，已有 Redis 或文件历史可在启动时导入。设置 `agent.memory.long-term.enabled: true` 后，异步压缩的会话摘要及向量写入独立的 Milvus 集合，按账号和知识库范围跨会话召回。连接方式见 [MySQL 部署配置](docs/mysql/README.md)。
+完整会话和账号画像默认写入 MySQL，已有 Redis 或文件历史可在启动时导入。设置 `agent.memory.long-term.enabled: true` 后，异步压缩的会话摘要及向量按账号和知识库范围跨会话召回。摘要、元数据和向量默认写入 SQLite，设置 `doc-mcp.vector-store: milvus` 后写入独立的 Milvus 集合。详见 [文档处理与 MCP](docs/guides/document-mcp.md)。
 
 删除会话会清理该会话的 Milvus 摘要、MySQL 会话和消息，以及 Redis 或文件中的旧历史。账号画像保留。任一步报错时可重试同一个删除请求。
 

@@ -1,0 +1,28 @@
+# yaml-language-server: $schema=https://www.promptfoo.dev/config-schema.json
+description: Tian 知识工作台 Agent 意图识别和工作流路由回归
+
+prompts:
+  - '{{question}}'
+
+providers:
+  - id: file://./tian-provider.cjs
+    label: Tian Agent SSE
+    config:
+      mode: agent
+      timeoutMs: 185000
+
+defaultTest:
+  options:
+    disableVarExpansion: true
+  assert:
+    - type: javascript
+      metric: intent_exact_match
+      value: |-
+        const actual = [...new Set(output.route.intentTypes)].sort();
+        const expected = [...context.vars.expectedIntents].sort();
+        return JSON.stringify(actual) === JSON.stringify(expected);
+    - type: javascript
+      metric: workflow_route_accuracy
+      value: 'output.route.requiresWorkflow === context.vars.expectedWorkflow'
+
+tests: file://./tests/agent.yaml

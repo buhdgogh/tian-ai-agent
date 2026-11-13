@@ -20,7 +20,7 @@ public class DocMcpProperties {
     private double hybridKeywordWeight = 0.35;
     private double mmrRelevanceWeight = 0.78;
     private int maxCandidatesPerDocument = 4;
-    private String vectorStore = "local";
+    private String vectorStore = "sqlite";
     private Milvus milvus = new Milvus();
     private Mineru mineru = new Mineru();
     private Embedding embedding = new Embedding();
@@ -143,7 +143,13 @@ public class DocMcpProperties {
     public int getMaxCandidatesPerDocument() { return maxCandidatesPerDocument; }
     public void setMaxCandidatesPerDocument(int maxCandidatesPerDocument) { this.maxCandidatesPerDocument = maxCandidatesPerDocument; }
     public String getVectorStore() { return vectorStore; }
-    public void setVectorStore(String vectorStore) { this.vectorStore = vectorStore; }
+    public void setVectorStore(String vectorStore) {
+        this.vectorStore = switch (vectorStore.strip().toLowerCase(java.util.Locale.ROOT)) {
+            case "local", "sqlite" -> "sqlite";
+            case "milvus" -> "milvus";
+            default -> throw new IllegalArgumentException("doc-mcp.vector-store 只支持 sqlite 或 milvus");
+        };
+    }
     public Milvus getMilvus() { return milvus; }
     public void setMilvus(Milvus milvus) { this.milvus = milvus; }
     public Mineru getMineru() { return mineru; }

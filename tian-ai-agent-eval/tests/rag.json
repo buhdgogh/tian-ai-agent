@@ -1,0 +1,33 @@
+[
+  {
+    "description": "RAG-01 精确查找归档校验码",
+    "vars": {
+      "caseId": "RAG-01",
+      "question": "根据知识库，北辰沙盒的归档校验码是什么？请引用来源。",
+      "expectedEvidence": [
+        { "fileName": "tian-eval-fixture.txt", "fact": "BC-7319" }
+      ]
+    }
+  },
+  {
+    "description": "RAG-02 用改写问题查找故障登记队列",
+    "vars": {
+      "caseId": "RAG-02",
+      "question": "北辰沙盒跑失败了，应该把故障单放到哪个队列？请给出队列名称和来源。",
+      "expectedEvidence": [
+        { "fileName": "tian-eval-incident.txt", "fact": "Aurora-Desk" }
+      ]
+    }
+  },
+  {
+    "description": "RAG-03 跨两份文档汇总归档和故障信息",
+    "vars": {
+      "caseId": "RAG-03",
+      "question": "请依据北辰沙盒知识库填写交接记录的两项内容：归档校验码和运行失败后的故障登记队列。分别给出值和来源。",
+      "expectedEvidence": [
+        { "fileName": "tian-eval-fixture.txt", "fact": "BC-7319" },
+        { "fileName": "tian-eval-incident.txt", "fact": "Aurora-Desk" }
+      ]
+    }
+  }
+]

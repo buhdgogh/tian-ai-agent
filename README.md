@@ -37,7 +37,7 @@ Tian-AI-Agent-main/
 | --- | --- |
 | MySQL | 完整会话和消息、账号画像、模型配置、个人 MCP 配置、运行摘要 `agent_run` 和执行明细 `agent_request_log`。 |
 | SQLite | 知识库空间、解析任务、文档和 Chunk 元数据。默认文件是后端的 data/knowledge.sqlite，本地向量也保存在该文件。 |
-| Milvus | 可配置为知识库向量后端。启用长期记忆后，压缩摘要及其向量写入独立集合，按账号和知识库范围召回。 |
+| Milvus | 可选的知识库和长期记忆存储。叶子 Chunk 和长期记忆分别写入独立集合，默认使用 SQLite。 |
 | Redis | 上传限流、RAG 语义缓存，以及可导入的旧版会话历史。 |
 | 文件系统或 OSS | 原始上传文件。解析后的 Markdown 和编译后的 Wiki 版本保存在配置的本地目录。 |
 
@@ -95,7 +95,7 @@ mvn -pl tian-ai-agent-app -am package -DskipTests
 java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 ```
 
-也可以在 IDEA 中运行 `TianAiAgentAdminApplication`，工作目录选后端根目录。启动参数加上 `--spring.profiles.active=local` 可启用 Milvus 长期记忆。文档检索使用 Milvus 时，另将 `doc-mcp.vector-store` 配置为 `milvus`。
+也可以在 IDEA 中运行 `TianAiAgentAdminApplication`，工作目录选后端根目录。启动参数加上 `--spring.profiles.active=local` 可启用长期记忆。知识库向量和长期记忆默认存入 SQLite，将 `doc-mcp.vector-store` 配置为 `milvus` 可统一切换到 Milvus。
 
 - 后端 API 根路径为 `http://localhost:8123/api`。
 - 健康检查为 `GET /api/health`。

@@ -60,7 +60,9 @@ java -jar tian-ai-agent-app/target/tian-ai-agent-backend.jar
 
 MinerU解析完成后只把Markdown交还Java，后续层级切块、Embedding、SQLite/Milvus写入、混合召回和MMR均在Java侧完成。
 
-使用 Milvus 时，将 `doc-mcp.vector-store` 设为 `milvus`，并在 `doc-mcp.milvus` 下填写连接和集合配置。
+`doc-mcp.vector-store` 默认是 `sqlite`，旧值 `local` 仍可使用。SQLite 保存完整的 Chunk 层级、正文、元数据和叶子向量。启用 `agent.memory.long-term.enabled` 后，长期记忆的摘要、元数据和向量也写入 SQLite。
+
+使用 Milvus 时，将 `doc-mcp.vector-store` 设为 `milvus`，并在 `doc-mcp.milvus` 下填写连接和集合配置。叶子 Chunk 的正文、元数据和向量写入知识库集合，长期记忆写入独立集合。SQLite 仍保存文档元数据、解析任务和完整 Chunk 层级，用于补充引用上下文。切换后端后，需要为已有文档重新建立目标存储的索引。历史记忆留在原存储中。
 
 Milvus 模式将叶子 Chunk 向量与长期记忆分别保存到独立 Collection；文档、解析任务和层级关系仍由 SQLite 管理。
 同一个 `doc_id` 再次入库时会先 upsert 新叶子 Chunk，再删除已经失效的旧 Chunk；

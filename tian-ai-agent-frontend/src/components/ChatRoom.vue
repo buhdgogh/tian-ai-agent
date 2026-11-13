@@ -16,11 +16,14 @@
             <RouterLink v-if="msg.task?.id" :to="{ path: '/agent-runs', query: { taskId: msg.task.id } }">工作流日志</RouterLink>
           </div>
           <div v-if="msg.incomplete" class="note muted">生成已停止 · 以下为不完整内容</div>
-          <details v-if="msg.trace?.length" class="agent-trace" :open="generating && index === visibleMessages.length - 1">
+          <details v-if="msg.trace?.length" class="agent-trace" :open="aiType === 'agent' || (generating && index === visibleMessages.length - 1)">
             <summary><span class="trace-mark">⌁</span><strong>执行路径</strong><small>{{ msg.trace.length }} 个步骤</small></summary>
             <ol>
               <li v-for="(step,stepIndex) in msg.trace" :key="step.id || `${step.type}-${stepIndex}`" :class="'trace-'+step.type">
-                <i>{{ traceIcon(step.type) }}</i><span><strong>{{ step.title }}</strong><small v-if="step.detail">{{ step.detail }}</small><code v-if="step.tool">{{ step.tool }}</code></span><em>{{ ({ failed:'失败', called:'已调用', completed:'已完成' })[step.status] || '已记录' }}</em>
+                <span v-if="step.status === 'running'" class="trace-spinner" aria-hidden="true"></span>
+                <i v-else aria-hidden="true">{{ traceIcon(step.type) }}</i>
+                <span><strong>{{ step.title }}</strong><small v-if="step.detail">{{ step.detail }}</small><code v-if="step.tool">{{ step.tool }}</code></span>
+                <em :role="step.status === 'running' ? 'status' : undefined">{{ traceStatus(step.status) }}</em>
               </li>
             </ol>
           </details>
@@ -50,7 +53,7 @@
           <time>{{ formatTime(msg.time) }}</time>
         </div>
       </article>
-      <article v-if="generating && !emergencyText && !messages.at(-1)?.content" class="message assistant"><div class="avatar"><WorkspaceIcon name="agent" /></div><div class="bubble loading"><i></i><i></i><i></i><span>正在处理请求…</span></div></article>
+      <article v-if="aiType !== 'agent' && generating && !emergencyText && !messages.at(-1)?.content" class="message assistant"><div class="avatar"><WorkspaceIcon name="agent" /></div><div class="bubble loading"><i></i><i></i><i></i><span>正在处理请求…</span></div></article>
     </div>
     <footer>
       <div class="composer-wrap" @keydown.capture="handlePromptKeys">
@@ -213,6 +216,7 @@ const send = text => {
   input.value = ''
 }
 const formatTime=v=>new Date(v||Date.now()).toLocaleTimeString('zh-CN',{hour:'2-digit',minute:'2-digit'})
+const traceStatus = status => ({ running: '运行中', failed: '失败', called: '已调用', completed: '已完成', cancelled: '已停止' })[status] || '已记录'
 const traceIcon=type=>({thinking:'思',tool:'调',complete:'✓',error:'!'}[type]||'·')
 const score=v=>Math.round(Number(v)*(Number(v)<=1?100:1))+'%'
 const riskLabel=v=>({EMERGENCY:'紧急',HIGH:'高风险',ROUTINE:'常规',MEDIUM:'中风险',LOW:'低风险'}[String(v||'').toUpperCase()]||'待评估')
@@ -233,6 +237,7 @@ const stringify=v=>Array.isArray(v)?v.map(x=>'- '+(typeof x==='object'?JSON.stri
 const reportParts=r=>[['摘要',r.summary],['证据摘要',r.evidence||r.evidenceSummary],['不确定性',r.uncertainties],['危险信号',r.redFlags],['建议的下一步',r.nextSteps]].filter(x=>x[1]!=null&&x[1]!=='').map(x=>({title:x[0],value:stringify(x[1])}))
 const scroll=async()=>{await nextTick();if(scroller.value)scroller.value.scrollTop=scroller.value.scrollHeight}
 watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose({
+  restoreInput: text => { if (!input.value) input.value = text },
   clearInput: () => {
     closePromptPicker()
     input.value = ''
@@ -240,8 +245,8 @@ watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose(
 })
 </script>
 <style scoped>
-.chat-shell { display: flex; flex: 1; flex-direction: column; min-height: 0; color: var(--ink); background: var(--canvas); }
-.messages { flex: 1; min-height: 0; overflow: auto; padding: 24px max(16px, calc((100% - 840px) / 2)); }
+.chat-shell { --chat-content-width: 1060px; display: flex; flex: 1; flex-direction: column; min-height: 0; color: var(--ink); background: var(--canvas); }
+.messages { flex: 1; min-height: 0; overflow: auto; padding: 24px max(16px, calc((100% - var(--chat-content-width)) / 2)); }
 .welcome { max-width: 650px; margin: clamp(20px, 8vh, 90px) auto 0; text-align: center; }
 .welcome-icon { display: grid; place-items: center; width: 54px; height: 54px; margin: 0 auto 17px; border: 1px solid #dce1ff; border-radius: 15px; color: var(--chat-accent); background: var(--accent-soft); }
 .welcome-icon svg { width: 24px; height: 24px; }
@@ -256,6 +261,7 @@ watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose(
 .avatar { display: grid; place-items: center; flex: 0 0 30px; height: 30px; border-radius: 9px; color: var(--accent-ink); background: var(--accent-soft); font-size: 12px; font-weight: 750; }
 .avatar svg { width: 16px; height: 16px; }
 .bubble { min-width: 0; max-width: min(90%, 720px); padding: 13px 15px; border: 1px solid var(--line); border-radius: 4px 13px 13px; background: var(--surface); box-shadow: var(--shadow); line-height: 1.7; }
+.assistant .bubble { flex: 1; max-width: none; }
 .user .bubble { border-color: #dfe3ff; border-radius: 13px 4px 13px 13px; background: var(--accent-soft); }
 .bubble time { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }
 .user time { text-align: right; }
@@ -278,6 +284,18 @@ watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose(
 .agent-trace li small,.agent-trace li code,.agent-trace li em { color: var(--muted); font-size: 11px; }
 .agent-trace li small,.agent-trace li code { display: block; overflow-wrap: anywhere; }
 .agent-trace li em { font-style: normal; }
+.trace-spinner {
+  box-sizing: border-box;
+  width: 16px;
+  height: 16px;
+  margin: 2px;
+  border: 2px solid var(--line);
+  border-top-color: var(--chat-accent);
+  border-radius: 50%;
+  animation: trace-spin .8s linear infinite;
+}
+@keyframes trace-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .trace-spinner { animation: none; } }
 .report,.rag-quality,.sources { margin-top: 10px; }
 .report header,.rag-quality header { justify-content: space-between; }
 .report-part,.rag-plan,.coverage,.rag-warnings,.source-detail { padding: 8px 10px; }
@@ -302,7 +320,7 @@ watch(()=>JSON.stringify(props.messages),scroll);onMounted(scroll);defineExpose(
 @keyframes pulse { 50% { opacity: .25; transform: translateY(-2px); } }
 @media (prefers-reduced-motion: reduce) { .loading i { animation: none; } }
 
-footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - 840px) / 2)) 14px; }
+footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - var(--chat-content-width)) / 2)) 14px; }
 .composer-wrap { position: relative; }
 .prompt-menu {
   position: absolute;

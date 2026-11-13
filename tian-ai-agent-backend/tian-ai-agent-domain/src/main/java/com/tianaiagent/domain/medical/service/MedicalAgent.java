@@ -50,7 +50,8 @@ public class MedicalAgent extends ToolCallAgent {
                 同一轮需要多个工具时，互不依赖的只读查询应同时调用。下游参数需要引用本轮其他工具结果时，
                 使用 {{tool:N#/JSON/Pointer}}，N 是从 0 开始的工具调用序号，例如 {{tool:0#/sources/0/chunkId}}；
                 执行器会根据参数引用构建依赖图，不要引用写操作的结果，也不要构造循环依赖。
-                """ + (medical ? "完成后调用 doTerminate。" : "答案写在最后一条助手消息中。"));
+                答案写在最后一条助手消息中。
+                """);
         setMaxSteps(16);
         setChatClient(chatClient);
     }

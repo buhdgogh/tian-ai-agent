@@ -29,7 +29,8 @@ public class EncryptedToolCredentialStore implements ToolCredentialStore {
     public String find(String ownerId, PersonalTool tool) {
         byte[] data;
         if (mysql != null) {
-            data = mysql.find(ownerId, tool.name());
+            var row = mysql.find(ownerId, tool.name());
+            data = row == null ? null : row.ciphertext();
         } else {
             try {
                 data = Files.readAllBytes(file(ownerId, tool));

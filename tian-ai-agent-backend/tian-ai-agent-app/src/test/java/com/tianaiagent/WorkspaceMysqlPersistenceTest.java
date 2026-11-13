@@ -9,6 +9,8 @@ import com.tianaiagent.domain.agent.model.entity.AgentRun;
 import com.tianaiagent.domain.agent.service.AgentRunAudit;
 import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.agent.model.valobj.ModelProvider;
+import com.tianaiagent.domain.agent.model.valobj.PersonalTool;
+import com.tianaiagent.domain.agent.service.ToolCredentialService;
 import com.tianaiagent.domain.conversation.adapter.port.ConversationMemoryRegistry;
 import com.tianaiagent.domain.conversation.adapter.repository.LongTermMemoryStore;
 import com.tianaiagent.domain.conversation.adapter.repository.UserProfileStore;
@@ -116,12 +118,30 @@ class WorkspaceMysqlPersistenceTest {
     @Autowired AgentRunRepository runs;
     @Autowired AgentRunAudit audit;
     @Autowired AgentTools agentTools;
+    @Autowired ToolCredentialService toolCredentials;
     @MockitoSpyBean RoutedChatModel chatModel;
     private JdbcTemplate jdbc;
 
     @BeforeEach
     void connectSqlAssertions() {
         jdbc = new JdbcTemplate(database.dataSource());
+    }
+
+    @Test
+    void readsTheCompleteEncryptedToolCredentialFromMysql() {
+        String owner = "credential_test";
+        String token = "mineru-test-token";
+        toolCredentials.save(owner, PersonalTool.MINERU, token);
+        try {
+            assertThat(jdbc.queryForObject("""
+                    SELECT OCTET_LENGTH(ciphertext) FROM agent_tool_credential
+                    WHERE owner_id=? AND tool='MINERU'
+                    """, Integer.class, owner)).isEqualTo(12 + 16 + token.length());
+            assertThat(toolCredentials.resolve(owner, PersonalTool.MINERU)).isEqualTo(token);
+            assertThat(toolCredentials.resolve(owner, PersonalTool.SEARCH)).isEmpty();
+        } finally {
+            toolCredentials.clear(owner, PersonalTool.MINERU);
+        }
     }
 
     @DynamicPropertySource
@@ -302,7 +322,7 @@ class WorkspaceMysqlPersistenceTest {
                     reply.put("object", "chat.completion.chunk");
                     var delta = choice.putObject("delta").put("role", "assistant");
                     for (var message : payload.path("messages")) {
-                        if ("tool".equals(message.path("role").asText())) {
+                        if ("echo-1".equals(message.path("tool_call_id").asText())) {
                             toolResult.set(message.path("content").asText());
                         }
                     }
@@ -315,7 +335,13 @@ class WorkspaceMysqlPersistenceTest {
                                 offeredTool.set(function);
                             }
                         }
-                        if (offeredTool.get() == null) {
+                        if (!payload.path("messages").findValuesAsText("tool_call_id").contains("discover-echo")) {
+                            assertThat(payload.path("tools").findValuesAsText("name")).containsExactly("toolSearchTool");
+                            choice.put("finish_reason", "tool_calls");
+                            delta.putArray("tool_calls").addObject().put("index", 0).put("id", "discover-echo")
+                                    .put("type", "function").putObject("function")
+                                    .put("name", "toolSearchTool").put("arguments", "{\"query\":\"echo\"}");
+                        } else if (offeredTool.get() == null) {
                             delta.put("content", "未收到 MCP 工具");
                         } else {
                             choice.put("finish_reason", "tool_calls");

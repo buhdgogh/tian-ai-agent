@@ -71,7 +71,7 @@ export async function readLocalWorkspace(root, { action, path, offset }) {
     return await readFile(root, parts, path, offset)
   } catch (error) {
     if (error.name === 'NotAllowedError' || error.name === 'SecurityError') {
-      return failure('WORKSPACE_PERMISSION_DENIED', '目录读取权限已失效，请重新选择工作区')
+      return failure('WORKSPACE_PERMISSION_DENIED', '目录读取权限已失效，请重新授权当前工作区')
     }
     if (error.name === 'NotFoundError' || error.name === 'TypeMismatchError') {
       return failure('WORKSPACE_ENTRY_NOT_FOUND', '该文件或目录不存在')

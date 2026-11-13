@@ -1,0 +1,13 @@
+# yaml-language-server: $schema=https://www.promptfoo.dev/config-schema.json
+description: Tian 知识工作台普通对话回归
+
+prompts:
+  - '{{question}}'
+
+providers:
+  - id: file://./tian-provider.cjs
+    label: Tian 普通对话
+    config:
+      mode: chat
+
+tests: file://./tests/chat.yaml

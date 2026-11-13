@@ -6,11 +6,15 @@
     @send-message="send" @stop-generation="stop">
     <template #composer-actions>
       <div class="composer-options">
-        <button type="button" class="ui-button workspace-button" :disabled="pickingWorkspace || status === 'connecting'"
+        <span v-if="workspaceLocked" class="ui-pill workspace-button" :title="workspace.name">
+          工作区 · {{ workspace.name }}
+        </span>
+        <button v-else-if="!workspaceLoading && !workspaceUnavailable" type="button" class="ui-button workspace-button"
+          :disabled="pickingWorkspace || preparingWorkspace || status === 'connecting'"
           :title="workspace ? workspace.name : '选择要授权读取的本地项目目录'" @click="selectWorkspace">
           {{ workspace ? '工作区 · ' + workspace.name : '选择工作区' }}
         </button>
-        <button v-if="workspace" type="button" class="ui-button" :disabled="pickingWorkspace || status === 'connecting'"
+        <button v-if="workspace && !workspaceLocked" type="button" class="ui-button" :disabled="pickingWorkspace || preparingWorkspace || status === 'connecting'"
           aria-label="移除本地工作区" @click="clearWorkspace">移除</button>
         <select id="agent-model" class="ui-field composer-model" aria-label="选择模型"
           :value="modelProviderId || ''" :disabled="!modelProviders.length"
@@ -31,16 +35,18 @@
         </details>
       </div>
       <span v-if="workspaceError" class="workspace-hint" role="alert">{{ workspaceError }}</span>
-      <span v-else-if="workspace" class="workspace-hint">只读 · 按需向当前模型发送文件片段</span>
+      <span v-else-if="workspaceLoading" class="workspace-hint" role="status">正在加载会话工作区…</span>
+      <span v-else-if="workspace && !workspaceLocked" class="workspace-hint">只读 · 按需向当前模型发送文件片段</span>
     </template>
   </ChatRoom>
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import ChatRoom from '../components/ChatRoom.vue'
 import { streamAgentDispatch, getSessionMessages, getTask, getAgentPresets, getApiToken, replyWorkspaceRead } from '../api'
 import { readLocalWorkspace } from '../utils/localWorkspace'
+import { bindWorkspace, getWorkspaceBinding } from '../utils/workspaceBindings'
 import { apiError, emergencyMessage, newChatId, normalizeHistory, toolLabel } from '../utils/medical'
 
 const props = defineProps({
@@ -55,6 +61,10 @@ const chatRoom = ref(null)
 const workspace = shallowRef(null)
 const workspaceError = ref('')
 const pickingWorkspace = ref(false)
+const preparingWorkspace = ref(false)
+const workspaceLocked = ref(false)
+const workspaceLoading = ref(false)
+const workspaceUnavailable = ref(false)
 const skillPicker = ref(null)
 const skills = ref([])
 const skillIds = ref([])
@@ -69,6 +79,8 @@ let localChatId
 const pollTimers = new Set()
 
 async function selectWorkspace() {
+  if (workspaceLocked.value || pickingWorkspace.value || preparingWorkspace.value || status.value === 'connecting') return
+  const scope = version
   workspaceError.value = ''
   if (typeof window.showDirectoryPicker !== 'function') {
     workspaceError.value = '目录选择需要通过 HTTPS 或 localhost 使用支持的 Chrome 或 Edge。'
@@ -76,15 +88,17 @@ async function selectWorkspace() {
   }
   pickingWorkspace.value = true
   try {
-    workspace.value = await window.showDirectoryPicker({ mode: 'read' })
+    const directory = await window.showDirectoryPicker({ mode: 'read' })
+    if (scope === version) workspace.value = directory
   } catch (error) {
-    if (error.name !== 'AbortError') workspaceError.value = '无法打开目录，请重新选择并允许读取。'
+    if (scope === version && error.name !== 'AbortError') workspaceError.value = '无法打开目录，请重新选择并允许读取。'
   } finally {
-    pickingWorkspace.value = false
+    if (scope === version) pickingWorkspace.value = false
   }
 }
 
 function clearWorkspace() {
+  if (workspaceLocked.value || preparingWorkspace.value || status.value === 'connecting') return
   workspace.value = null
   workspaceError.value = ''
 }
@@ -123,7 +137,29 @@ onMounted(() => {
   loadTemplates()
 })
 
+function finishTrace(target, status = 'completed') {
+  target.trace.forEach(step => {
+    if (step.status === 'running') step.status = status
+  })
+}
+
+function startThinking(target, step, root) {
+  const id = 'react-' + step
+  if (target.trace.some(item => item.id === id)) return
+  finishTrace(target)
+  target.trace.push({
+    id, type: 'thinking', title: '第 ' + step + ' 步 · 思考', status: 'running',
+    detail: step === 1 ? (root ? '本地工作区 · 只读' : 'ReAct') : undefined
+  })
+}
+
 function stop() {
+  const target = messages.value.at(-1)
+  if (status.value === 'connecting' && target?.trace && !target.task) {
+    finishTrace(target, 'cancelled')
+    if (target.content) target.incomplete = true
+    else target.content = '已停止生成。'
+  }
   controller?.abort()
   status.value = 'disconnected'
 }
@@ -138,6 +174,20 @@ function reset() {
 function showTask(target, task) {
   if (!messages.value.includes(target)) return
   target.task = task
+  const active = task.status === 'PENDING' || task.status === 'RUNNING'
+  const events = (task.events || []).map(event => event.replace(/^\d{4}-\d{2}-\d{2}T\S+\s+/, ''))
+  const previousSteps = events.slice(0, -1).map((title, index) => ({
+    id: 'workflow-event-' + index, workflow: true, type: 'thinking', title, status: 'completed'
+  }))
+  const planSteps = (task.result?.plan?.steps || []).map(step => ({
+    id: 'workflow-plan-' + step.id, workflow: true, type: 'thinking', status: 'completed',
+    title: '步骤 ' + step.order + ' · ' + step.role, detail: step.description
+  }))
+  target.trace = [...target.trace.filter(step => !step.workflow), ...previousSteps, ...planSteps, {
+    id: 'workflow-stage', workflow: true, type: 'thinking', title: task.stage || '等待工作流',
+    detail: active ? events.at(-1) : undefined,
+    status: active ? 'running' : task.status === 'FAILED' ? 'failed' : task.status === 'CANCELLED' ? 'cancelled' : 'completed'
+  }]
   if (task.status === 'COMPLETED') {
     target.content = task.result?.executionResult || '工作流已完成。'
     return
@@ -153,7 +203,10 @@ function showTask(target, task) {
       const { data } = await getTask(task.id)
       showTask(target, data)
     } catch (error) {
-      if (messages.value.includes(target)) target.content = '暂时无法刷新任务，' + apiError(error)
+      if (messages.value.includes(target)) {
+        finishTrace(target, 'failed')
+        target.content = '暂时无法刷新任务，' + apiError(error)
+      }
     }
   }, 1800)
   pollTimers.add(timer)
@@ -161,10 +214,43 @@ function showTask(target, task) {
 
 async function send(text) {
   if (status.value === 'connecting') return
+  const selectionScope = version
+  const restoreDraft = () => nextTick(() => {
+    if (selectionScope === version) chatRoom.value?.restoreInput(text)
+  })
+  if (workspaceLoading.value || workspaceUnavailable.value || pickingWorkspace.value || preparingWorkspace.value) {
+    restoreDraft()
+    return
+  }
+  const chatId = props.chatIdProp || newChatId('agent')
   const root = workspace.value
   workspaceError.value = ''
+  if (root) {
+    preparingWorkspace.value = true
+    try {
+      if (workspaceLocked.value) {
+        const permission = await root.requestPermission({ mode: 'read' })
+        if (permission !== 'granted') throw new Error('请在浏览器授权提示中允许读取当前工作区，再发送消息。')
+      } else {
+        const binding = await bindWorkspace(chatId, props.spaceId, root)
+        if (selectionScope !== version) return
+        workspace.value = binding.directory
+        workspaceLocked.value = true
+        if (!binding.created && !await root.isSameEntry(binding.directory)) {
+          throw new Error('该会话已绑定上方显示的工作区，请重新发送消息。')
+        }
+      }
+    } catch (error) {
+      if (selectionScope !== version) return
+      workspaceError.value = error.message || '无法访问当前工作区，请重试。'
+      restoreDraft()
+      return
+    } finally {
+      if (selectionScope === version) preparingWorkspace.value = false
+    }
+    if (selectionScope !== version) return
+  }
   const scope = ++version
-  const chatId = props.chatIdProp || newChatId('agent')
   if (!props.chatIdProp) {
     localChatId = chatId
     emit('update-chat-id', chatId)
@@ -172,7 +258,9 @@ async function send(text) {
   emit('chat-activity', chatId)
   emergency.value = ''
   messages.value.push({ content: text, isUser: true, time: Date.now() },
-    { content: '', isUser: false, time: Date.now(), trace: [] })
+    { content: '', isUser: false, time: Date.now(), trace: [
+      { id: 'intent', type: 'thinking', title: '意图识别', status: 'running' }
+    ] })
   const target = messages.value.at(-1)
   controller = new AbortController()
   const { signal } = controller
@@ -193,28 +281,35 @@ async function send(text) {
         void answerWorkspaceRead(root, target.runId, data, signal)
       } else if (type === 'route') {
         const strategy = { KEYWORD: '规则匹配', LLM: '模型分类', KEYWORD_FALLBACK: '规则回退' }[data.strategy]
-        if (strategy) target.trace.push({
-          type: 'thinking', title: '意图识别 · ' + strategy,
+        Object.assign(target.trace[0], {
+          title: strategy ? '意图识别 · ' + strategy : '意图识别',
           detail: data.intentTypes?.join('、'), status: 'completed'
         })
         const readsToolInventory = data.intentTypes?.some(intent =>
           intent === 'TOOL_INVENTORY' || intent === 'MCP_TOOL_INVENTORY')
-        if (readsToolInventory) target.trace.push({ type: 'thinking', title: '读取工具清单', status: 'called' })
-        else if (!data.requiresWorkflow) target.trace.push({
-          type: 'thinking', title: root ? '本地工作区 · 只读' : 'ReAct', status: 'called'
-        })
+        if (readsToolInventory) target.trace.push({ type: 'thinking', title: '读取工具清单', status: 'running' })
+        else if (!data.requiresWorkflow && !data.intentTypes?.includes('EMERGENCY')) startThinking(target, 1, root)
+        else if (data.requiresWorkflow) target.trace.push({ type: 'thinking', title: '提交工作流', status: 'running' })
+      } else if (type === 'thinking') {
+        startThinking(target, data.step, root)
       } else if (type === 'delta') {
+        finishTrace(target)
         target.content += data.text
       } else if (type === 'tools') {
+        finishTrace(target)
         const tools = data.names.filter(name => name !== 'doTerminate')
-        if (tools.length) target.content = ''
-        tools.forEach(name => target.trace.push({ type: 'tool', title: toolLabel(name), tool: name, status: 'called' }))
+        if (tools.length) {
+          const thinking = target.trace.findLast(step => step.id?.startsWith('react-'))
+          if (thinking && target.content.trim()) thinking.detail = target.content.trim()
+          target.content = ''
+        }
+        tools.forEach(name => target.trace.push({ type: 'tool', title: toolLabel(name), tool: name, status: 'running' }))
       } else if (type === 'task' && data.id) {
-        target.trace.push({ type: 'thinking', title: 'Plan–Execute–Replan', detail: '已提交工作流', status: 'called' })
-        target.content = '工作流已提交，正在等待结果。'
+        finishTrace(target)
         showTask(target, data)
       } else if (type === 'error') {
         serverError = true
+        if (!target.task) finishTrace(target, 'failed')
         target.runId = data.runId || target.runId
         if (target.content) target.incomplete = true
         else target.content = data.message
@@ -222,12 +317,17 @@ async function send(text) {
     }, signal)
     if (scope !== version) return
     if (!sawDone && !serverError) throw new Error('流式连接中断，请查看运行日志。')
-    if (!target.content.trim()) target.content = 'Agent 本轮未返回最终回答。'
+    if (!target.task) {
+      finishTrace(target)
+      if (!target.content.trim()) target.content = 'Agent 本轮未返回最终回答。'
+    }
     if (props.medical) emergency.value = emergencyMessage(target.content)
     if (!serverError) skillIds.value = []
     emit('update-history')
   } catch (error) {
     if (scope !== version) return
+    if (signal.aborted || target.task) return
+    finishTrace(target, 'failed')
     if (error.status === 400 && skillIds.value.length) loadSkills()
     if (target.content) target.incomplete = true
     else target.content = apiError(error)
@@ -243,6 +343,26 @@ watch([() => props.chatIdProp, () => props.spaceId], async ([id, spaceId]) => {
   }
   reset()
   const scope = version
+  workspace.value = null
+  workspaceLocked.value = false
+  workspaceError.value = ''
+  workspaceUnavailable.value = false
+  workspaceLoading.value = Boolean(id)
+  pickingWorkspace.value = false
+  preparingWorkspace.value = false
+  if (id) {
+    getWorkspaceBinding(id, spaceId).then(directory => {
+      if (scope !== version) return
+      workspace.value = directory
+      workspaceLocked.value = Boolean(directory)
+    }).catch(() => {
+      if (scope !== version) return
+      workspaceUnavailable.value = true
+      workspaceError.value = '无法读取会话的本地工作区绑定，请重新打开会话。'
+    }).finally(() => {
+      if (scope === version) workspaceLoading.value = false
+    })
+  }
   messages.value = []
   emergency.value = ''
   if (!id) return

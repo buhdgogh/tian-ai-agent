@@ -6,6 +6,7 @@ import com.tianaiagent.domain.medical.service.MedicalSafetyService;
 
 import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.agent.service.MyLoggerAdvisor;
+import com.tianaiagent.domain.agent.service.ToolCallAgent;
 import com.tianaiagent.domain.agent.adapter.port.AgentTools;
 import com.tianaiagent.domain.conversation.adapter.port.ConversationMemoryRegistry;
 import com.tianaiagent.domain.conversation.model.valobj.ConversationSummary;
@@ -23,10 +24,12 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatModel;
+import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
 import java.util.List;
+import java.util.Set;
 
 /** 面向健康教育和循证信息查询的医疗助手，不提供诊断或处方。 */
 @Service
@@ -67,6 +70,7 @@ public class MedicalAdvisorService {
     private final ObjectMapper objectMapper;
     private final MedicalQueryRewriter queryRewriter;
     private final LayeredMemoryService layeredMemory;
+    private final ChatClient toolChatClient;
 
     public MedicalAdvisorService(ChatModel dashscopeChatModel,
                                  ConversationMemoryRegistry memoryService,
@@ -90,6 +94,8 @@ public class MedicalAdvisorService {
         this.ragChatClient = ChatClient.builder(dashscopeChatModel)
                 .defaultAdvisors(MessageChatMemoryAdvisor.builder(ragChatMemory).build(), new MyLoggerAdvisor())
                 .build();
+        this.toolChatClient = ChatClient.builder(dashscopeChatModel)
+                .defaultAdvisors(new MyLoggerAdvisor()).build();
     }
 
     public List<ConversationSummary> listConversations() {
@@ -161,6 +167,7 @@ public class MedicalAdvisorService {
     }
 
     @Resource private AgentTools agentTools;
+    @Resource(name = "parallelToolCallExecutor") private AsyncTaskExecutor parallelToolCallExecutor;
 
     public JsonNode doChatWithRag(String message, String chatId, String spaceId) {
         return doChatWithRag(message, chatId, spaceId, true);
@@ -251,9 +258,17 @@ public class MedicalAdvisorService {
     public String doChatWithTools(String message, String chatId, String spaceId, boolean medical) {
         MedicalSafetyService.RiskAssessment risk = safetyService.assess(message);
         if (medical && risk.emergency()) return risk.message();
-        return chatClient.prompt().system(medical ? SYSTEM_PROMPT : GENERAL_PROMPT).user(message)
-                .advisors(spec -> spec.param(ChatMemory.CONVERSATION_ID, chatId))
-                .toolCallbacks(agentTools.forSpace(spaceId, medical)).call().content();
+        var agent = new ToolCallAgent(agentTools.forSpace(spaceId, medical), parallelToolCallExecutor, Set.of());
+        agent.setName("toolChat");
+        agent.setChatClient(toolChatClient);
+        agent.setSystemPrompt(medical ? SYSTEM_PROMPT : GENERAL_PROMPT);
+        agent.setChatId(chatId);
+        agent.setChatMemory(chatMemory);
+        agent.setHistoryWriter(messages -> chatMemory.add(chatId, messages.stream()
+                .filter(item -> item instanceof UserMessage
+                        || (item instanceof AssistantMessage assistant && !assistant.hasToolCalls()))
+                .toList()));
+        return agent.runFinalAnswer(message);
     }
 
 }

@@ -38,6 +38,7 @@ class ToolCallAgentTest {
         ToolCallback second = callback("secondRead", "second", bothStarted, active, maxActive);
         ToolCallAgent agent = new ToolCallAgent(
                 new ToolCallback[]{first, second}, executor, Set.of("firstRead", "secondRead"));
+        discover(agent, "firstRead secondRead");
 
         AssistantMessage message = new AssistantMessage("", Map.of(), List.of(
                 new AssistantMessage.ToolCall("call-1", "function", "firstRead", "{}"),
@@ -63,6 +64,7 @@ class ToolCallAgentTest {
         });
         ToolCallAgent agent = new ToolCallAgent(
                 new ToolCallback[]{source, downstream}, executor, Set.of("source", "downstream"));
+        discover(agent, "source downstream");
 
         AssistantMessage message = new AssistantMessage("", Map.of(), List.of(
                 new AssistantMessage.ToolCall("call-1", "function", "source", "{}"),
@@ -92,6 +94,7 @@ class ToolCallAgentTest {
         });
         ToolCallAgent agent = new ToolCallAgent(
                 new ToolCallback[]{first, second}, executor, Set.of("first", "second"));
+        discover(agent, "first second");
         AssistantMessage message = new AssistantMessage("", Map.of(), List.of(
                 new AssistantMessage.ToolCall("call-1", "function", "first",
                         "{\"value\":\"{{tool:1}}\"}"),
@@ -120,6 +123,7 @@ class ToolCallAgentTest {
         });
         ToolCallAgent agent = new ToolCallAgent(
                 new ToolCallback[]{source, downstream}, executor, Set.of("source", "downstream"));
+        discover(agent, "source downstream");
         AssistantMessage message = new AssistantMessage("", Map.of(), List.of(
                 new AssistantMessage.ToolCall("call-1", "function", "source", "{}"),
                 new AssistantMessage.ToolCall("call-2", "function", "downstream",
@@ -144,6 +148,7 @@ class ToolCallAgentTest {
         });
         ToolCallAgent agent = new ToolCallAgent(
                 new ToolCallback[]{source, downstream}, executor, Set.of("source", "downstream"));
+        discover(agent, "source downstream");
         AssistantMessage message = new AssistantMessage("", Map.of(), List.of(
                 new AssistantMessage.ToolCall("call-1", "function", "source", "{}"),
                 new AssistantMessage.ToolCall("call-2", "function", "downstream",
@@ -156,6 +161,45 @@ class ToolCallAgentTest {
         var toolResponse = (org.springframework.ai.chat.messages.ToolResponseMessage)
                 agent.getMessageList().getLast();
         assertTrue(toolResponse.getResponses().get(1).responseData().contains("不存在路径"));
+    }
+
+    @Test
+    void exposesOnlyFiveMatchesAndReplacesThemOnTheNextSearch() {
+        ToolCallback[] candidates = java.util.stream.IntStream.range(0, 8)
+                .mapToObj(index -> simpleCallback("weather_" + index, ignored -> "ok"))
+                .toArray(ToolCallback[]::new);
+        var search = new ToolSearchSession(candidates);
+        var otherRun = new ToolSearchSession(candidates);
+        assertEquals(1, search.callbacks().size());
+        assertEquals(5, search.search("weather").size());
+        assertEquals(6, search.callbacks().size());
+        assertEquals(1, otherRun.callbacks().size());
+        assertTrue(search.search("unrelated-query").isEmpty());
+        assertEquals(1, search.callbacks().size());
+    }
+
+    @Test
+    void rejectsCallsToToolsThatHaveNotBeenDiscovered() {
+        AtomicInteger calls = new AtomicInteger();
+        var agent = new ToolCallAgent(new ToolCallback[]{
+                simpleCallback("hiddenTool", ignored -> String.valueOf(calls.incrementAndGet()))
+        }, executor, Set.of());
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("", Map.of(), List.of(
+                        new AssistantMessage.ToolCall("hidden", "function", "hiddenTool", "{}")))))));
+
+        agent.act();
+
+        assertEquals(0, calls.get());
+    }
+
+    private static void discover(ToolCallAgent agent, String query) {
+        var search = new AssistantMessage.ToolCall("discovery", "function", "toolSearchTool",
+                "{\"query\":\"" + query + "\"}");
+        agent.setToolCallChatResponse(new ChatResponse(List.of(new Generation(
+                new AssistantMessage("", Map.of(), List.of(search))))));
+        agent.act();
+        agent.getMessageList().clear();
     }
 
     private static ToolCallback callback(String name, String result, CountDownLatch bothStarted,

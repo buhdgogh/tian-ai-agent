@@ -53,6 +53,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class ModelRoutingIntegrationTest {
     private static final String OWNER = "Bearer trace-owner-test-token-123456";
     private static final String OTHER = "Bearer trace-other-test-token-123456";
+    private static final String INDEPENDENT_TASKS = "请分别完成两个独立任务。第一，说明如何把一份 PDF 文档解析并入库。"
+            + "第二，为虚构的北辰项目生成一份进度报告模板。这两个任务独立交付，只需在聊天中提供文本。";
     private static HttpServer server;
     private static final AtomicReference<String> SECONDARY_REQUEST = new AtomicReference<>();
     private static final AtomicReference<String> SECONDARY_AUTH = new AtomicReference<>();
@@ -80,7 +82,9 @@ class ModelRoutingIntegrationTest {
             SECONDARY_REQUEST.set(payload);
             SECONDARY_AUTH.set(exchange.getRequestHeaders().getFirst("Authorization"));
             var parsed = new ObjectMapper().readTree(payload);
-            if (payload.contains("工作区集成验证")) {
+            if (payload.contains("虚构的北辰项目")) {
+                respondIndependentTasks(exchange, parsed);
+            } else if (payload.contains("工作区集成验证")) {
                 respondWorkspaceModel(exchange, parsed);
             } else if (parsed.path("stream").asBoolean() && payload.contains("Java怎么学") && STREAM_GATE.get() != null) {
                 var gate = STREAM_GATE.get();
@@ -125,8 +129,15 @@ class ModelRoutingIntegrationTest {
                         .put("created", 1).put("model", "secondary-actual");
                 reply.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop").set("message", message);
                 respond(exchange, 200, reply.toString());
-            } else if (!parsed.path("tools").isEmpty()
-                    && !parsed.path("messages").findValuesAsText("role").contains("tool")) {
+            } else if (parsed.path("tools").findValuesAsText("name").equals(java.util.List.of("toolSearchTool"))) {
+                respond(exchange, 200, """
+                        {"id":"chat-search","object":"chat.completion","created":1,"model":"secondary-actual",
+                         "choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
+                           {"id":"search-1","type":"function","function":{"name":"toolSearchTool","arguments":"{\\"query\\":\\"doTerminate\\"}"}}
+                         ]},"finish_reason":"tool_calls"}]}
+                        """);
+            } else if (parsed.path("tools").findValuesAsText("name").contains("doTerminate")
+                    && !parsed.path("messages").findValuesAsText("tool_call_id").contains("tool-1")) {
                 respond(exchange, 200, """
                         {"id":"chat-tool","object":"chat.completion","created":1,"model":"secondary-actual",
                          "choices":[{"index":0,"message":{"role":"assistant","tool_calls":[
@@ -432,6 +443,25 @@ class ModelRoutingIntegrationTest {
     }
 
     @Test
+    void workflowCompletesTwoIndependentTextStepsWithToolDiscoveryAvailable() throws Exception {
+        String payload = mapper.createObjectNode().put("chatId", "parallel-" + java.util.UUID.randomUUID())
+                .put("message", INDEPENDENT_TASKS).toString();
+        var response = mvc.perform(post("/ai/dispatch").header("Authorization", OWNER)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.mode").value("WORKFLOW")).andReturn().getResponse();
+        String taskId = mapper.readTree(response.getContentAsString()).path("task").path("id").asText();
+        org.awaitility.Awaitility.await().untilAsserted(() -> {
+            var task = tasks.get(taskId);
+            assertThat(task.getStatus()).withFailMessage("工作流状态 %s，错误 %s", task.getStatus(), task.getError())
+                    .isEqualTo(TaskStatus.COMPLETED);
+            var result = mapper.valueToTree(task.getResult());
+            assertThat(result.path("executions")).hasSize(2);
+            assertThat(result.path("executionResult").asText()).contains("PDF 入库步骤", "北辰项目进度模板");
+            assertThat(task.getEvents()).anyMatch(event -> event.contains("并行执行 2 个无依赖步骤"));
+        });
+    }
+
+    @Test
     void dispatchKeepsTheGeneralQuestionAsTheLastUserMessage() throws Exception {
         String chatId = "java-" + java.util.UUID.randomUUID();
         String payload = mapper.createObjectNode().put("chatId", chatId).put("message", "Java怎么学").toString();
@@ -522,7 +552,7 @@ class ModelRoutingIntegrationTest {
         String runId = latestRun();
         String listId = list.path("requestId").asText();
         var toolNames = mapper.readTree(SECONDARY_REQUEST.get()).path("tools").findValuesAsText("name");
-        assertThat(toolNames).containsExactlyInAnyOrder("listWorkspaceFiles", "readWorkspaceFile", "doTerminate");
+        assertThat(toolNames).containsExactlyInAnyOrder("toolSearchTool", "listWorkspaceFiles", "readWorkspaceFile");
         String listResponse = """
                 {"ok":true,"entries":[{"name":"pom.xml","kind":"file"}]}
                 """;
@@ -542,7 +572,11 @@ class ModelRoutingIntegrationTest {
                 .andExpect(status().isNoContent());
 
         var response = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse();
-        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).contains("项目使用 Maven", "event:done");
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).containsSubsequence(
+                "event:route", "event:thinking", "\"step\":1", "event:tools",
+                "event:thinking", "\"step\":2", "event:workspace_request",
+                "event:thinking", "\"step\":3", "event:workspace_request",
+                "event:thinking", "\"step\":4", "项目使用 Maven", "event:done");
         mvc.perform(get("/ai/sessions/{id}/messages", chatId).param("workspace", "true").param("type", "agent")
                         .header("Authorization", OWNER))
                 .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(2))
@@ -632,6 +666,45 @@ class ModelRoutingIntegrationTest {
         respond(exchange, status, "application/json; charset=UTF-8", body);
     }
 
+    private static void respondIndependentTasks(com.sun.net.httpserver.HttpExchange exchange,
+                                                com.fasterxml.jackson.databind.JsonNode request) throws IOException {
+        var json = new ObjectMapper();
+        var messages = request.path("messages");
+        String system = messages.get(0).path("content").asText();
+        String answer;
+        if (system.contains("你是请求分类器")) {
+            answer = "{\"intentTypes\":[\"OTHER\"],\"confidence\":1,\"requiresWorkflow\":true}";
+        } else if (system.contains("的 Planner")) {
+            answer = """
+                    {"summary":"两个独立文本任务","steps":[
+                      {"id":"step1","role":"资料说明","description":"说明 PDF 入库步骤","successCriteria":"给出文本步骤","dependsOn":[]},
+                      {"id":"step2","role":"模板编写","description":"编写北辰项目进度模板","successCriteria":"给出文本模板","dependsOn":[]}
+                    ]}
+                    """;
+        } else if (system.contains("你是结果整合器")) {
+            String input = messages.get(messages.size() - 1).path("content").asText();
+            answer = input.contains("导入并检查索引状态") && input.contains("里程碑及下一步")
+                    ? "PDF 入库步骤：导入并检查索引状态。\n北辰项目进度模板：里程碑及下一步。" : "缺少执行结果";
+        } else if (system.contains("工作流 Reviewer")) {
+            answer = """
+                    {"passed":true,"requiresHumanReview":false,"reviewerRole":"NONE","message":"已核对两个交付项",
+                     "issues":[],"revisionInstruction":"","replanRequired":false}
+                    """;
+        } else {
+            if (!request.path("tools").findValuesAsText("name").equals(java.util.List.of("toolSearchTool"))) {
+                respond(exchange, 400, "{\"error\":{\"message\":\"工具搜索入口缺失\"}}");
+                return;
+            }
+            String input = messages.get(messages.size() - 1).path("content").asText();
+            answer = input.contains("当前步骤：1.") ? "导入并检查索引状态。" : "里程碑及下一步。";
+        }
+        var reply = json.createObjectNode().put("id", "workflow-test").put("object", "chat.completion")
+                .put("created", 1).put("model", "secondary-actual");
+        reply.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop")
+                .putObject("message").put("role", "assistant").put("content", answer);
+        respond(exchange, 200, reply.toString());
+    }
+
     private static void respondWorkspaceModel(com.sun.net.httpserver.HttpExchange exchange,
                                               com.fasterxml.jackson.databind.JsonNode request) throws IOException {
         var json = new ObjectMapper();
@@ -650,12 +723,24 @@ class ModelRoutingIntegrationTest {
                 .put("object", "chat.completion.chunk").put("created", 1).put("model", "secondary-actual");
         var choice = response.putArray("choices").addObject().put("index", 0);
         var delta = choice.putObject("delta").put("role", "assistant");
-        if (toolReplies < 2) {
+        if (toolReplies < 3) {
             choice.put("finish_reason", "tool_calls");
+            String tool = switch ((int) toolReplies) {
+                case 0 -> "toolSearchTool";
+                case 1 -> "listWorkspaceFiles";
+                default -> "readWorkspaceFile";
+            };
+            String arguments = switch ((int) toolReplies) {
+                case 0 -> "{\"query\":\"listWorkspaceFiles readWorkspaceFile\"}";
+                case 1 -> "{}";
+                default -> "{\"path\":\"pom.xml\"}";
+            };
+            if (toolReplies == 0) {
+                assertThat(request.path("tools").findValuesAsText("name")).containsExactly("toolSearchTool");
+            }
             delta.putArray("tool_calls").addObject().put("index", 0).put("id", "workspace-tool-" + toolReplies)
                     .put("type", "function").putObject("function")
-                    .put("name", toolReplies == 0 ? "listWorkspaceFiles" : "readWorkspaceFile")
-                    .put("arguments", toolReplies == 0 ? "{}" : "{\"path\":\"pom.xml\"}");
+                    .put("name", tool).put("arguments", arguments);
         } else {
             choice.put("finish_reason", "stop");
             delta.put("content", messages.toString().contains("WORKSPACE_FILE_TEST_CONTENT") ? "项目使用 Maven" : "未取得文件");

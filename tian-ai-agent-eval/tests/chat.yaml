@@ -1,0 +1,33 @@
+  - description: CHAT-01 精确输出约束
+    vars:
+      question: '请只输出大写英文 OK，不加标点、Markdown 或其他文字。'
+    assert:
+      - type: equals
+        value: 'OK'
+
+  - description: CHAT-02 中文事实问答
+    vars:
+      question: '在标准大气压下，纯水的沸点是多少摄氏度？请用一句中文回答。'
+    assert:
+      - type: contains
+        value: '100'
+      - type: contains-any
+        value: ['摄氏度', '℃', '°C']
+
+  - description: CHAT-03 多行输入与 JSON 输出约束
+    vars:
+      question: |-
+        把以下字段输出为 JSON 对象。只输出 JSON，不使用 Markdown 代码围栏。
+        status: "ready"
+        count: 2
+    assert:
+      - type: is-json
+        value:
+          type: object
+          required: [status, count]
+          additionalProperties: false
+          properties:
+            status:
+              const: ready
+            count:
+              const: 2

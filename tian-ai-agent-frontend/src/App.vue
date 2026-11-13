@@ -66,6 +66,7 @@ import WorkspaceIcon from './components/WorkspaceIcon.vue'
 import AppSidebar from './components/AppSidebar.vue'
 import MedicalBoundary from './components/MedicalBoundary.vue'
 import DesktopAccess from './components/DesktopAccess.vue'
+import { deleteWorkspaceBinding } from './utils/workspaceBindings'
 import { getSessions, deleteSession, getKnowledgeSpaces, getModelProviders, getApiToken, setApiToken, desktopClient, savedDesktopApi } from './api'
 
 const route = useRoute()
@@ -206,6 +207,7 @@ const handleDeleteChat = async (chat) => {
   const selected = spaceId.value
   try {
     await deleteSession(chat.id, type, selected || undefined)
+    await deleteWorkspaceBinding(chat.id, selected).catch(() => {})
     if (!showSidebar.value || selected !== spaceId.value) return
     historyList.value = historyList.value.filter(item => item.id !== chat.id)
     if (currentChatId.value === chat.id) currentChatId.value = ''
