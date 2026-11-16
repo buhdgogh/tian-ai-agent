@@ -22,7 +22,7 @@ public class SpaceEmbeddings {
     }
 
     public EmbeddingBinding bind(String ownerId, String providerId) {
-        if (providerId == null || providerId.isBlank()) return null;
+        if (providerId == null || providerId.isBlank()) throw new IllegalArgumentException("请选择知识库的向量嵌入模型");
         ModelProvider provider = provider(ownerId, providerId);
         int dimensions;
         try {

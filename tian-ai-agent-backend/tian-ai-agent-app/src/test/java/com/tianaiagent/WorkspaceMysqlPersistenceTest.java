@@ -495,9 +495,9 @@ class WorkspaceMysqlPersistenceTest {
     @Test
     void conversationMigratesAndPreservesHistoryBeyondTheContextWindow() throws Exception {
         long conversationId = jdbc.queryForObject(
-                "SELECT id FROM agent_conversation WHERE storage_id=?", Long.class, CHAT);
+                "SELECT id FROM agent_session WHERE storage_id=?", Long.class, CHAT);
         assertThat(jdbc.queryForObject("""
-                SELECT COUNT(*) FROM agent_conversation_message m JOIN agent_conversation c ON m.conversation_id=c.id
+                SELECT COUNT(*) FROM agent_session_message m JOIN agent_session c ON m.conversation_id=c.id
                 WHERE c.storage_id=?
                 """, Integer.class, CHAT)).isEqualTo(2);
         mvc.perform(get("/ai/sessions/existing-chat/messages").header("Authorization", OWNER)
@@ -515,7 +515,7 @@ class WorkspaceMysqlPersistenceTest {
         assertThat(history.subList(0, 3).stream().map(Message::getText)).containsExactly("旧会话", "旧回答", "新消息😀");
         assertThat(((AssistantMessage) history.get(3)).getToolCalls()).isEqualTo(call.getToolCalls());
         assertThat(((ToolResponseMessage) history.get(4)).getResponses()).isEqualTo(response.getResponses());
-        assertThat(jdbc.queryForObject("SELECT owner_id FROM agent_conversation WHERE storage_id=?",
+        assertThat(jdbc.queryForObject("SELECT owner_id FROM agent_session WHERE storage_id=?",
                 String.class, CHAT)).isEqualTo("db_owner");
 
         mvc.perform(get("/ai/sessions/existing-chat/messages").header("Authorization", OTHER)
@@ -528,7 +528,7 @@ class WorkspaceMysqlPersistenceTest {
                 .andExpect(status().isOk());
         assertThat(memory.history(MEMORY, CHAT)).isEmpty();
         assertThat(jdbc.queryForObject(
-                "SELECT COUNT(*) FROM agent_conversation_message WHERE conversation_id=?",
+                "SELECT COUNT(*) FROM agent_session_message WHERE conversation_id=?",
                 Integer.class, conversationId)).isZero();
         assertThat(profiles.find("db_owner")).contains(new UserProfileStore.Profile(
                 Map.of("skill_level", "初学者", "learning_goal", "学习 Java"), Map.of("language", "English")));
@@ -580,8 +580,8 @@ class WorkspaceMysqlPersistenceTest {
 
     private List<String> storedContents(String storageId) {
         return jdbc.queryForList("""
-                SELECT m.content FROM agent_conversation c
-                JOIN agent_conversation_message m ON m.conversation_id=c.id
+                SELECT m.content FROM agent_session c
+                JOIN agent_session_message m ON m.conversation_id=c.id
                 WHERE c.memory_space=? AND c.storage_id=? ORDER BY m.id
                 """, String.class, MEMORY, storageId);
     }

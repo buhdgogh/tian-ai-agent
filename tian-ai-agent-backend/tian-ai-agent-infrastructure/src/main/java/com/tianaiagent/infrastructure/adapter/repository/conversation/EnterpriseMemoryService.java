@@ -63,7 +63,7 @@ public class EnterpriseMemoryService implements ConversationMemoryRegistry {
                 persisted.put(space, memory);
             });
             this.spaces = Map.copyOf(persisted);
-            log.info("会话存储：MySQL。完整历史写入 agent_conversation 和 agent_conversation_message");
+            log.info("会话存储：MySQL。完整历史写入 agent_session 和 agent_session_message");
         }
     }
 

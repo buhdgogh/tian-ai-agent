@@ -9,6 +9,7 @@ import com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace;
 import com.tianaiagent.domain.knowledge.model.valobj.MedicalDocumentMetadata;
 import com.tianaiagent.domain.knowledge.adapter.port.UploadRateLimiter;
 import com.tianaiagent.domain.knowledge.service.KnowledgeBaseService;
+import com.tianaiagent.domain.knowledge.service.RagEvaluationService;
 import com.tianaiagent.domain.task.model.aggregate.TaskRecord;
 import org.springframework.web.server.ResponseStatusException;
 import com.tianaiagent.domain.knowledge.service.WikiGraphService;
@@ -27,7 +28,6 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
-@RequestMapping("/knowledge-base")
 public class KnowledgeBaseController {
     private static final Logger log = LoggerFactory.getLogger(KnowledgeBaseController.class);
 
@@ -43,20 +43,23 @@ public class KnowledgeBaseController {
     @Resource
     private AgentRunAudit runAudit;
 
-    @GetMapping("/wiki-graph")
+    @Resource
+    private RagEvaluationService ragEvaluationService;
+
+    @GetMapping("/knowledge-base/wiki-graph")
     public WikiGraphService.Graph wikiGraph(@RequestParam String spaceId) {
         knowledgeBaseService.requireMcp();
         return wiki.getObject().load(spaceId);
     }
 
-    @GetMapping("/wiki-pages/{pageId}")
+    @GetMapping("/knowledge-base/wiki-pages/{pageId}")
     public WikiGraphService.PageContent wikiPage(@RequestParam String spaceId, @PathVariable String pageId) {
         knowledgeBaseService.requireMcp();
         return wiki.getObject().page(spaceId, pageId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wiki 页面不存在或原始资料已更新"));
     }
 
-    @PostMapping("/wiki-compile")
+    @PostMapping("/knowledge-base/wiki-compile")
     @ResponseStatus(HttpStatus.ACCEPTED)
     public TaskRecord compileWiki(@RequestParam String spaceId,
                                   @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
@@ -65,10 +68,10 @@ public class KnowledgeBaseController {
         return wiki.getObject().submit(spaceId, identity.ownerId());
     }
 
-    @GetMapping("/spaces")
+    @GetMapping("/knowledge-base/spaces")
     public List<KnowledgeSpace> spaces() { return knowledgeBaseService.listSpaces(); }
 
-    @PostMapping("/spaces")
+    @PostMapping("/knowledge-base/spaces")
     @ResponseStatus(HttpStatus.CREATED)
     public KnowledgeSpace createSpace(@RequestBody CreateKnowledgeSpaceRequest request,
                                       @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
@@ -76,7 +79,7 @@ public class KnowledgeBaseController {
         return knowledgeBaseService.createSpace(request.name(), request.medical(), identity.ownerId(), request.embeddingProviderId());
     }
 
-    @DeleteMapping("/spaces/{spaceId}")
+    @DeleteMapping("/knowledge-base/spaces/{spaceId}")
     public ResponseEntity<?> deleteSpace(@PathVariable String spaceId,
                                          @RequestBody(required = false) DeleteKnowledgeSpaceRequest request,
                                          @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
@@ -98,7 +101,7 @@ public class KnowledgeBaseController {
         }
     }
 
-    @PostMapping("/upload")
+    @PostMapping("/knowledge-base/upload")
     public ResponseEntity<?> uploadFile(@RequestParam("file") MultipartFile file,
                                         @RequestParam String spaceId,
                                         @RequestParam(required = false) String issuer,
@@ -132,14 +135,14 @@ public class KnowledgeBaseController {
         }
     }
 
-    @GetMapping("/files")
+    @GetMapping("/knowledge-base/files")
     public List<Map<String, Object>> listFiles(@RequestParam String spaceId,
                                                @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         identity.requireAdmin();
         return knowledgeBaseService.listFiles(spaceId);
     }
 
-    @DeleteMapping("/files/{id}")
+    @DeleteMapping("/knowledge-base/files/{id}")
     public Map<String, String> deleteFile(@PathVariable String id,
                                           @RequestParam String spaceId,
                                           @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
@@ -149,23 +152,31 @@ public class KnowledgeBaseController {
     }
 
     /** 检索多层级知识片段并生成带证据的回答。 */
-    @PostMapping("/query")
+    @PostMapping("/knowledge-base/query")
     public String query(@RequestBody QueryRequest request,
                         @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         return runAudit.call(identity.ownerId(), "RAG_CHAT",
                 () -> knowledgeBaseService.query(request.spaceId(), request.question()));
     }
 
-    @PostMapping("/query-with-sources")
+    @PostMapping("/knowledge-base/query-with-sources")
     public JsonNode queryWithSources(@RequestBody QueryRequest request,
                                     @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         return runAudit.call(identity.ownerId(), "RAG_CHAT",
                 () -> knowledgeBaseService.queryWithSources(request.spaceId(), request.question(), request.topK()));
     }
 
-    @PostMapping("/retrieve")
+    @PostMapping("/knowledge-base/retrieve")
     public JsonNode retrieve(@RequestBody QueryRequest request) {
         return knowledgeBaseService.retrieve(request.spaceId(), request.question(), request.topK());
     }
 
+    @PostMapping("/rag-evaluations")
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    public TaskRecord evaluateRag(@RequestBody RagEvaluationService.EvaluationRequest request,
+                                  @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
+        identity.requireAdmin();
+        return ragEvaluationService.submit(new RagEvaluationService.EvaluationRequest(request.name(), identity.ownerId(),
+                request.spaceId(), request.topK(), request.generateAnswers(), request.cases()));
+    }
 }

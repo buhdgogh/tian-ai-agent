@@ -1,0 +1,23 @@
+{
+  "identifier": "main",
+  "description": "Allow the main local window to use the fixed Java API, diagnostics and its authorized Docker workspace.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "allow-check-health",
+    "allow-java-access",
+    "allow-configure-java",
+    "allow-java-call",
+    "allow-desktop-diagnostics",
+    "allow-run-agent",
+    "allow-cancel-agent",
+    "allow-check-docker",
+    "allow-select-workspace",
+    "allow-get-active-sandbox",
+    "allow-create-sandbox",
+    "allow-stop-sandbox",
+    "allow-exec-in-sandbox",
+    "allow-list-sandbox-files"
+  ]
+}

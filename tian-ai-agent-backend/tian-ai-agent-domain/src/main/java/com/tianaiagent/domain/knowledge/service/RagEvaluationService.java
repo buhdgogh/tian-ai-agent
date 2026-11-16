@@ -17,10 +17,10 @@ import java.util.Optional;
 public class RagEvaluationService {
     private final AsyncTaskCenter taskCenter;
     private final Optional<IndexService> indexing;
-    private final Optional<KnowledgeIndex> answers;
+    private final Optional<KnowledgeAnswerService> answers;
 
     public RagEvaluationService(AsyncTaskCenter taskCenter,
-                                Optional<IndexService> indexing, Optional<KnowledgeIndex> answers) {
+                                Optional<IndexService> indexing, Optional<KnowledgeAnswerService> answers) {
         this.taskCenter = taskCenter;
         this.indexing = indexing;
         this.answers = answers;
@@ -66,7 +66,7 @@ public class RagEvaluationService {
             int citationCount = 0;
             if (request.generateAnswers()) {
                 var cited = answers.orElseThrow(McpDisabledException::new)
-                        .queryWithSources(request.spaceId(), item.question(), topK);
+                        .answerFromChunks(request.spaceId(), item.question(), topK);
                 answer = cited.answer();
                 citationCount = cited.sources().size();
                 if (citationCount > 0) citationAnswers++;

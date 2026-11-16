@@ -42,6 +42,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "spring.ai.dashscope.api-key=",
         "doc-mcp.enabled=false",
         "agent.models.cooldown=0s",
+        "agent.models.opencode.executable=./missing-opencode-cli-for-test",
         "agent.memory.backend=file",
         "agent.memory.long-term.enabled=false",
         "agent.access.users[0].id=trace_owner",
@@ -336,6 +337,36 @@ class ModelRoutingIntegrationTest {
         }
     }
 
+    @Test
+    void selectedOpenCodeModelUsesOnlyTheOwnersRouteAndReportsCliFailure() throws Exception {
+        var update = mapper.createObjectNode().put("version", settingsVersion(OWNER));
+        update.putArray("providers");
+        var free = update.putObject("openCodeFree").put("apiKey", "opencode-test-key");
+        mvc.perform(put("/model-providers").header("Authorization", OWNER).contentType(MediaType.APPLICATION_JSON)
+                        .content(update.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.openCodeFree.hasApiKey").value(true));
+        try {
+            assertThat(openCodeDispatch(OWNER)).contains("event:error", "OPENCODE_EXECUTABLE");
+            assertThat(openCodeDispatch(OTHER)).contains("event:error", "请先在模型设置中保存 OpenCode API Key");
+        } finally {
+            update.put("version", settingsVersion(OWNER));
+            free.remove("apiKey");
+            free.put("clear", true);
+            mvc.perform(put("/model-providers").header("Authorization", OWNER).contentType(MediaType.APPLICATION_JSON)
+                            .content(update.toString())).andExpect(status().isOk());
+        }
+    }
+
+    private String openCodeDispatch(String authorization) throws Exception {
+        var payload = mapper.createObjectNode().put("chatId", "free-" + java.util.UUID.randomUUID())
+                .put("message", "Java怎么学").put("modelProviderId", "opencode-free:nemotron-3.5-lightning-free");
+        var stream = mvc.perform(post("/ai/dispatch/stream").header("Authorization", authorization)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload.toString()))
+                .andExpect(request().asyncStarted()).andReturn();
+        return mvc.perform(asyncDispatch(stream)).andExpect(status().isOk()).andReturn().getResponse()
+                .getContentAsString(StandardCharsets.UTF_8);
+    }
+
     private String settingsVersion(String authorization) throws Exception {
         var response = mvc.perform(get("/model-providers").header("Authorization", authorization))
                 .andExpect(status().isOk()).andReturn().getResponse();
@@ -588,7 +619,8 @@ class ModelRoutingIntegrationTest {
         var events = new AtomicReference<java.util.List<String>>();
         org.awaitility.Awaitility.await().atMost(java.time.Duration.ofSeconds(8)).untilAsserted(() -> {
             String stream = pending.getResponse().getContentAsString(StandardCharsets.UTF_8);
-            events.set(java.util.Arrays.stream(stream.split("\\R\\R"))
+            var frames = stream.split("\\r?\\n\\r?\\n", -1);
+            events.set(java.util.Arrays.stream(frames, 0, frames.length - 1)
                     .filter(event -> event.startsWith("event:workspace_request")).toList());
             assertThat(events.get().size()).isGreaterThan(index);
         });

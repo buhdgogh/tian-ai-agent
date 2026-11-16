@@ -29,6 +29,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(properties = {
+        "agent.models.ollama.enabled=false",
         "agent.persistence.mysql.enabled=false",
         "doc-mcp.enabled=false",
         "spring.ai.dashscope.api-key=",
@@ -85,6 +86,29 @@ class TianAiAgentAdminApplicationTests {
                 .andExpect(jsonPath("$.providers.length()").value(4))
                 .andExpect(jsonPath("$.providers[3].hasApiKey").value(true))
                 .andExpect(jsonPath("$.providers[3].apiKey").doesNotExist());
+    }
+
+    @Test
+    void storesOneOpenCodeKeyPerAccountAndOnlyReturnsItsStatus() throws Exception {
+        var initial = mvc.perform(get("/model-providers").header("Authorization", ALICE))
+                .andExpect(jsonPath("$.openCodeFree.models.length()").value(4))
+                .andExpect(jsonPath("$.openCodeFree.hasApiKey").value(false)).andReturn().getResponse();
+        var payload = mapper.createObjectNode()
+                .put("version", mapper.readTree(initial.getContentAsString()).path("version").asText());
+        payload.putArray("providers");
+        payload.putObject("openCodeFree").put("apiKey", "test-free-opencode-key");
+        var saved = mvc.perform(put("/model-providers").header("Authorization", ALICE)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.providers.length()").value(0))
+                .andExpect(jsonPath("$.openCodeFree.hasApiKey").value(true))
+                .andExpect(jsonPath("$.openCodeFree.apiKey").doesNotExist()).andReturn().getResponse();
+        mvc.perform(get("/model-providers").header("Authorization", BOB))
+                .andExpect(jsonPath("$.openCodeFree.hasApiKey").value(false));
+        payload.put("version", mapper.readTree(saved.getContentAsString()).path("version").asText());
+        payload.putObject("openCodeFree").put("clear", true);
+        mvc.perform(put("/model-providers").header("Authorization", ALICE)
+                        .contentType(MediaType.APPLICATION_JSON).content(payload.toString()))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.openCodeFree.hasApiKey").value(false));
     }
 
     @Test

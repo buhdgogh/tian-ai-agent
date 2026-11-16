@@ -157,6 +157,18 @@ java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p
 
 登录工作台后，点击右上角「模型设置」，选择提供商或自定义协议，填写 Base URL、模型名称和自己的 API Key。保存后，当前账号的后续请求使用自己的模型列表。移除所有个人模型并保存后，恢复使用平台默认配置。普通用户的身份来自各自的 `agent.access.users` 访问令牌，个人 API Key 由后端加密保存，读取配置时仅返回密钥是否已设置。
 
+### OpenCode 平台默认模型
+
+「模型设置 → 免费模型」预置了 OpenCode 免费模型。每个账号保存一份 OpenCode API Key 后，即可在 Web 的「Agent 问答」中选择这些模型。Key 沿用个人模型的加密存储。
+
+在运行 Spring Boot 的主机上安装 [OpenCode CLI](https://opencode.ai/docs/cli/commands/) v2（已验证 v2.2.3），确保后端能在 PATH 中找到 `opencode`，或在后端 `.env` 中设置 `OPENCODE_EXECUTABLE` 为可执行文件的绝对路径。Windows 上填写 `opencode.exe` 的路径。重启后端后，选中 OpenCode 免费模型的请求会通过 CLI 发出。上游返回 `429` 时，聊天会提示免费额度或限流。
+
+在后端 `.env` 或环境变量中同时设置 `OPENCODE_API_KEY` 和 `OPENCODE_MODEL` 后重启。模型名填写 OpenCode Console 对外部客户端开放的模型 ID。未配置个人聊天模型的账号可使用平台的 OpenCode 配置，调用费用由平台的 OpenCode 账号承担。Key 保存在后端。
+
+平台默认模型使用 Console API，可用模型和计费以 [OpenCode Console 模型目录](https://opencode.ai/docs/console/models/) 和 [推理 API](https://opencode.ai/docs/console/api/inference) 为准。
+
+如果设置了 `agent.models.providers`，使用显式提供商列表。否则优先使用已启用的 OpenCode 配置，其次沿用原有 DashScope 默认配置。
+
 自定义网关先在后端 `agent.models.allowed-user-origins` 中登记来源（`scheme://host[:port]`），用户再填写含 API 路径的 Base URL。该列表默认包含 DeepSeek、OpenAI 和阿里云百炼的公共地址。自定义列表时需保留部署允许使用的内置来源。默认配置保存在数据目录的 `model-settings` 下。启用工作台 MySQL 持久化后，个人模型配置及会话历史使用 MySQL，模型 API Key 的解密密钥仍保存在 `model-settings/storage.key`。详见 [MySQL 部署配置](docs/mysql/README.md)。
 
 平台默认模型可在运行目录的 `config/application.yml` 中配置 `agent.models.providers`，保存后重启后端。以下示例中的密钥需替换为自己的值，`base-url` 填到 API 前缀，程序会追加 `/chat/completions`。

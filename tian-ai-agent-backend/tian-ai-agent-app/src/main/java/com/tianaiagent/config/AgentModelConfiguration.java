@@ -12,6 +12,7 @@ import com.tianaiagent.domain.agent.adapter.repository.ModelProviderStore;
 import com.tianaiagent.domain.agent.model.valobj.ModelProvider;
 import com.tianaiagent.domain.agent.service.ModelProviderSettingsService;
 import com.tianaiagent.infrastructure.gateway.model.RoutedChatModel;
+import com.tianaiagent.infrastructure.gateway.model.OpenCodeChatModel;
 import org.springframework.ai.model.tool.ToolCallingManager;
 import org.springframework.ai.embedding.EmbeddingModel;
 import org.springframework.ai.embedding.observation.EmbeddingModelObservationConvention;
@@ -82,9 +83,16 @@ class AgentModelConfiguration {
                 || (allowBeijingWorkspaceEmbeddings && provider.usesBeijingWorkspaceEmbedding());
         return new ModelProviderSettingsService(store, allowed, (owner, providers) -> {
             var chatProviders = providers.stream()
-                    .filter(provider -> provider.protocol() != ModelProvider.Protocol.OPENAI_EMBEDDING).toList();
+                    .filter(provider -> provider.protocol() != ModelProvider.Protocol.OPENAI_EMBEDDING
+                            && provider.protocol() != ModelProvider.Protocol.OPENCODE_FREE).toList();
             var permitted = chatProviders.stream().filter(ModelProvider::enabled).filter(allowed).toList();
-            return router.prepareTargets(owner, targets.build().apply(permitted), !chatProviders.isEmpty());
+            var personal = new ArrayList<>(targets.build().apply(permitted));
+            var selectedOnly = providers.stream().filter(provider -> provider.protocol() == ModelProvider.Protocol.OPENCODE_FREE)
+                    .findFirst().map(provider -> ModelProvider.OPENCODE_FREE_MODELS.stream().map(model ->
+                            new RoutedChatModel.Target(ModelProvider.OPENCODE_FREE_ROUTE_PREFIX + model, model, 0,
+                                    new OpenCodeChatModel(config.opencode().executable(), provider.apiKey(), model, config.timeout())))
+                            .toList()).orElse(List.of());
+            return router.prepareTargets(owner, personal, !personal.isEmpty(), selectedOnly);
         });
     }
 
@@ -144,7 +152,7 @@ class AgentModelConfiguration {
                                 .defaultOptions(AnthropicChatOptions.builder().model(provider.model()).maxTokens(4096).build())
                                 .toolCallingManager(toolManager).retryTemplate(retry).build();
                     }
-                    case OPENAI_EMBEDDING -> throw new IllegalArgumentException("嵌入模型不能用于聊天");
+                    case OPENAI_EMBEDDING, OPENCODE_FREE -> throw new IllegalArgumentException("此配置不能用于聊天路由");
                 };
                 targets.add(new RoutedChatModel.Target(provider.id(), provider.model(), provider.priority(), model));
             }
@@ -164,7 +172,22 @@ class AgentModelConfiguration {
             providers.add(settings);
         }
 
+        var ollama = config.ollama();
+        if (providers.isEmpty() && ollama.enabled()) {
+            var provider = new ModelProvider("ollama", ModelProvider.Protocol.OPENAI_COMPATIBLE,
+                    "http://127.0.0.1:11434/v1", "ollama", ollama.model().strip(), 0, true, null, false, "none");
+            provider.validate();
+            providers.add(provider);
+        }
+        var openCode = config.opencode();
+        if (providers.isEmpty() && StringUtils.hasText(openCode.apiKey()) && StringUtils.hasText(openCode.model())) {
+            var provider = new ModelProvider("opencode", ModelProvider.Protocol.OPENAI_COMPATIBLE,
+                    ModelProvider.OPENCODE_BASE_URL, openCode.apiKey(), openCode.model().strip(), 0, true, null, false, null);
+            provider.validate();
+            providers.add(provider);
+        }
         List<RoutedChatModel.Target> defaults = new ArrayList<>(build.apply(providers));
+        boolean configuredDefaults = !providers.isEmpty();
         if (providers.isEmpty()) {
             if (StringUtils.hasText(legacyChat.getApiKey()) || StringUtils.hasText(legacyConnection.getApiKey())) {
                 var legacy = DashScopeConnectionUtils.resolveConnectionProperties(legacyConnection, legacyChat, "chat");
@@ -176,11 +199,12 @@ class AgentModelConfiguration {
                 defaults.add(new RoutedChatModel.Target("dashscope", legacyChat.getOptions().getModel(), 0, model));
             }
         }
-        return new ModelTargets(List.copyOf(defaults), build);
+        return new ModelTargets(List.copyOf(defaults), build, configuredDefaults);
     }
 
     record ModelTargets(List<RoutedChatModel.Target> defaults,
-                        Function<List<ModelProvider>, List<RoutedChatModel.Target>> build) {}
+                        Function<List<ModelProvider>, List<RoutedChatModel.Target>> build,
+                        boolean configuredDefaults) {}
 
     @Bean
     @Conditional(LegacyEmbeddingConfigured.class)

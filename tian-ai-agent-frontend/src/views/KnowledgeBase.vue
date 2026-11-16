@@ -83,8 +83,8 @@
               <option :value="false">通用</option><option :value="true">医疗</option>
             </select>
             <label class="embedding-field">向量嵌入模型
-              <select v-model="embeddingProviderId" class="ui-field" :disabled="embeddingLoading">
-                <option value="">后端默认</option>
+              <select v-model="embeddingProviderId" class="ui-field" required :disabled="embeddingLoading || embeddingError || !embeddingProviders.length">
+                <option value="" disabled>请选择向量嵌入模型</option>
                 <option v-for="model in embeddingProviders" :key="model.id" :value="model.id">{{ model.model }} · {{ model.id }}</option>
               </select>
             </label>
@@ -93,10 +93,11 @@
               <template v-else-if="embeddingError">加载嵌入模型失败。<button type="button" class="ui-button" @click="loadEmbeddingProviders">重试</button></template>
               <template v-else>
                 <RouterLink to="/model-settings">配置个人嵌入模型</RouterLink>
-                <span v-if="embeddingProviderId"> · 此知识库的文档入库和检索将使用该模型的 API Key。模型在创建时绑定。</span>
+                <span v-if="!embeddingProviders.length"> · 请先添加并启用至少一个已配置 API Key 的嵌入模型。</span>
+                <span v-else> · 所选模型将用于此知识库的入库和检索。</span>
               </template>
             </p>
-            <button class="ui-button" :disabled="busy || embeddingLoading">创建</button>
+            <button class="ui-button" :disabled="busy || embeddingLoading || embeddingError || !embeddingProviderId">创建</button>
           </form>
         </details>
       </div>
@@ -191,7 +192,10 @@ async function loadEmbeddingProviders() {
     const { data } = await getModelProviders()
     embeddingProviders.value = data.providers.filter(model =>
       model.protocol === 'OPENAI_EMBEDDING' && model.enabled && model.hasApiKey)
+    if (!embeddingProviders.value.some(model => model.id === embeddingProviderId.value)) embeddingProviderId.value = ''
   } catch {
+    embeddingProviders.value = []
+    embeddingProviderId.value = ''
     embeddingError.value = true
   } finally {
     embeddingLoading.value = false
@@ -199,15 +203,16 @@ async function loadEmbeddingProviders() {
 }
 
 async function create() {
-  if (busy.value || embeddingLoading.value || !name.value) return
+  if (busy.value || embeddingLoading.value || embeddingError.value || !name.value || !embeddingProviderId.value) return
   busy.value = true
   error.value = ''
   try {
-    const { data } = await createKnowledgeSpace(name.value, medicalSpace.value, embeddingProviderId.value || undefined)
+    const { data } = await createKnowledgeSpace(name.value, medicalSpace.value, embeddingProviderId.value)
     spaces.value.push(data)
     emit('space-created', data)
     selected.value = data.id
     name.value = ''
+    embeddingProviderId.value = ''
   } catch (failure) {
     error.value = apiError(failure)
   } finally {

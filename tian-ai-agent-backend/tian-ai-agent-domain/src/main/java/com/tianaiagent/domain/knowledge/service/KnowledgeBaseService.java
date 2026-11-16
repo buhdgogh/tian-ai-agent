@@ -661,19 +661,30 @@ public class KnowledgeBaseService {
 
     /** 返回LLM生成的回答和参与生成的可追溯原文证据。 */
     public JsonNode queryWithSources(String spaceId, String question, Integer topK) {
-        boolean semanticCache = space(spaceId).embedding() == null;
+        var space = space(spaceId);
+        boolean semanticCache = space.embedding() == null;
         if (question == null || question.isBlank()) {
             throw new RuntimeException("查询内容不能为空");
         }
         int limit = topK == null ? 8 : Math.max(1, Math.min(topK, 20));
         String normalizedQuestion = question.trim();
-        String version = knowledgeVersion(spaceId);
-        var cached = semanticRagCache.get(spaceId, normalizedQuestion, limit, version, semanticCache);
+        boolean hasWiki = wikiStore.flatMap(store -> {
+            try {
+                return store.load(spaceId);
+            } catch (IllegalStateException unavailable) {
+                return Optional.empty();
+            }
+        }).isPresent();
+        String version = hasWiki ? null : knowledgeVersion(spaceId);
+        var cached = hasWiki ? Optional.<KnowledgeAnswerCache.Hit>empty()
+                : semanticRagCache.get(spaceId, normalizedQuestion, limit, version, semanticCache);
         KnowledgeIndex.Answer answer = cached.map(KnowledgeAnswerCache.Hit::answer).orElseGet(() -> {
             KnowledgeIndex.Answer fresh = index().queryWithSources(spaceId, normalizedQuestion, limit);
-            synchronized (this) {
-                space(spaceId);
-                semanticRagCache.put(spaceId, normalizedQuestion, limit, version, fresh, semanticCache);
+            if (!hasWiki && !"wiki".equals(fresh.retrievalMode())) {
+                synchronized (this) {
+                    space(spaceId);
+                    semanticRagCache.put(spaceId, normalizedQuestion, limit, version, fresh, semanticCache);
+                }
             }
             return fresh;
         });

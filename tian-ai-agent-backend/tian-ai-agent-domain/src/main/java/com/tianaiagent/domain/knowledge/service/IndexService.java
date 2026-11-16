@@ -265,7 +265,7 @@ public class IndexService {
         return selected;
     }
 
-    private static Set<String> tokens(String text) {
+    static Set<String> tokens(String text) {
         Set<String> result = new LinkedHashSet<>();
         Matcher matcher = WORD.matcher(text == null ? "" : text.toLowerCase(Locale.ROOT));
         while (matcher.find() && result.size() < 5000) result.add(matcher.group());

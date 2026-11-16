@@ -58,10 +58,10 @@ class EmbeddedMcpConfiguration {
     @Bean
     @Primary
     AnswerModel answerModel(DocMcpProperties properties, HttpClient httpClient, ObjectMapper mapper,
-                            AgentModelProperties models, RoutedChatModel routedChatModel) {
+                            AgentModelConfiguration.ModelTargets targets, RoutedChatModel routedChatModel) {
         AnswerModel legacy = new DashScopeAnswerModel(properties, httpClient, mapper);
         AnswerModel routed = wikiAnswerModel(routedChatModel);
-        return (system, question) -> (models.providers().isEmpty() && !routedChatModel.hasPersonalRoutes() ? legacy : routed)
+        return (system, question) -> (!targets.configuredDefaults() && !routedChatModel.hasPersonalRoutes() ? legacy : routed)
                 .generate(system, question);
     }
 

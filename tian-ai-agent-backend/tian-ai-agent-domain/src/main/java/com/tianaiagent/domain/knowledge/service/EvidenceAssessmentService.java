@@ -29,7 +29,7 @@ public class EvidenceAssessmentService {
             return new Assessment(Level.NO_RELEVANT_EVIDENCE, false,
                     "召回资料与问题相关性过低，无法依据知识库回答。", "最高相关性低于阈值");
         }
-        if (hasExplicitConflict(sources)) {
+        if (hasExplicitConflict(sources.stream().map(KnowledgeIndex.Evidence::metadata).toList())) {
             return new Assessment(Level.CONFLICTING_EVIDENCE, true,
                     "资料存在明确冲突；请分别说明不同来源、版本与适用范围，不得自行消除冲突。",
                     "来源元数据包含相反的 evidence_stance");
@@ -42,10 +42,9 @@ public class EvidenceAssessmentService {
         return new Assessment(Level.SUFFICIENT_EVIDENCE, true, "", "证据达到生成阈值");
     }
 
-    private static boolean hasExplicitConflict(List<KnowledgeIndex.Evidence> sources) {
+    static boolean hasExplicitConflict(List<Map<String, Object>> sources) {
         Map<String, String> stances = new HashMap<>();
-        for (KnowledgeIndex.Evidence source : sources) {
-            Map<String, Object> metadata = source.metadata();
+        for (Map<String, Object> metadata : sources) {
             if (metadata == null) continue;
             String group = text(metadata.get("conflict_group"));
             String stance = text(metadata.get("evidence_stance")).toLowerCase(Locale.ROOT);

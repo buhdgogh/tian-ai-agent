@@ -8,18 +8,30 @@
       <button class="ui-button" type="button" :disabled="busy" @click="reload">重新加载</button>
     </header>
 
+    <div class="actions model-categories" role="group" aria-label="模型分类">
+      <button v-for="category in modelCategories" :key="category.id" class="ui-button" type="button"
+        :class="{ primary: activeCategory === category.id }" :aria-pressed="activeCategory === category.id"
+        @click="activeCategory = category.id">{{ category.title }}</button>
+    </div>
+
     <p v-if="error" class="ui-notice error" role="alert">{{ error }}</p>
     <p v-if="notice" class="ui-notice" role="status">{{ notice }}</p>
     <p v-if="busy && !version" class="ui-notice" role="status">正在加载配置…</p>
 
-    <form v-if="version" class="settings-form" @submit.prevent="save">
-      <p class="settings-hint">优先级数字越小越先尝试，相同优先级轮询。清空列表后保存，可恢复平台默认模型（如已配置）。</p>
-      <fieldset v-for="(row, index) in rows" :key="row.clientId" class="ui-panel provider" :disabled="busy">
+    <form v-if="version" class="settings-form" @submit.prevent="save" @invalid.capture="showInvalidCategory">
+      <section v-for="group in modelGroups" v-show="activeCategory === group.id" :key="group.id"
+        class="settings-form" :aria-label="group.title" :data-model-category="group.id">
+      <div class="actions">
+        <button v-for="button in group.buttons" :key="button.id" class="ui-button" type="button"
+          :disabled="busy || rows.length >= 20" @click="add(button.id)">{{ button.label }}</button>
+      </div>
+      <p v-if="!group.embedding" class="settings-hint">优先级数字越小越先尝试，相同优先级轮询。</p>
+      <fieldset v-for="row in rows.filter(item => isEmbedding(item) === group.embedding)" :key="row.clientId" class="ui-panel provider" :disabled="busy">
         <div class="provider-heading">
-          <h2>{{ row.model || '模型 ' + (index + 1) }}<span v-if="isEmbedding(row)" class="ui-pill">向量嵌入</span></h2>
+          <h3>{{ row.model || '新模型' }}</h3>
           <div class="actions">
             <label class="toggle"><input v-model="row.enabled" type="checkbox" /> 启用</label>
-            <button class="ui-button" type="button" @click="rows.splice(index, 1)">移除</button>
+            <button class="ui-button" type="button" @click="rows.splice(rows.indexOf(row), 1)">移除</button>
           </div>
         </div>
 
@@ -80,12 +92,24 @@
           </div>
         </details>
       </fieldset>
+      <p v-if="!rows.some(row => isEmbedding(row) === group.embedding)" class="ui-panel empty">暂无个人配置。</p>
+      </section>
 
-      <p v-if="rows.length === 0" class="ui-panel empty">暂无个人模型。添加后可选择提供商。</p>
-      <div class="actions form-actions">
-        <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('openai')">添加 OpenAI 兼容模型</button>
-        <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('claude')">添加 Anthropic 模型</button>
-        <button class="ui-button" type="button" :disabled="busy || rows.length >= 20" @click="add('openai-embedding')">添加向量嵌入模型</button>
+      <section v-show="activeCategory === 'free'" class="settings-form" aria-label="免费模型" data-model-category="free">
+        <fieldset class="ui-panel provider" :disabled="busy">
+          <div class="provider-heading"><h3>OpenCode</h3></div>
+          <ul class="free-models"><li v-for="model in freeModels" :key="model"><code>{{ model }}</code></li></ul>
+          <p class="settings-hint">以上模型共用一份 OpenCode API Key。保存后可在 Agent 问答中选择。</p>
+          <div class="fields">
+            <label>OpenCode API Key
+              <input v-model.trim="openCodeApiKey" class="ui-field" type="password" autocomplete="new-password"
+                maxlength="4096" :disabled="clearOpenCodeKey" :placeholder="hasOpenCodeKey ? '已保存，留空可沿用' : '输入 OpenCode API Key'" />
+            </label>
+            <label v-if="hasOpenCodeKey" class="toggle"><input v-model="clearOpenCodeKey" type="checkbox" /> 删除已保存的 Key</label>
+          </div>
+        </fieldset>
+      </section>
+      <div class="actions">
         <button class="ui-button primary" type="submit" :disabled="busy">{{ busy ? '处理中…' : '保存配置' }}</button>
       </div>
       <p class="settings-hint">常见提供商会自动填入地址和协议。其它地域或自建网关可在高级设置中调整，修改地址或协议时需要重新输入对应的 API Key。</p>
@@ -94,7 +118,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { getModelProviders, saveModelProviders } from '../api'
 import { apiError } from '../utils/medical'
 
@@ -112,14 +136,29 @@ const presets = [
 const detectPreset = row => presets.find(preset => preset.protocol === row.protocol
   && preset.baseUrl === row.baseUrl?.replace(/\/+$/, ''))?.id || 'custom'
 const rows = ref([])
+const modelGroups = [
+  { id: 'llm', title: 'LLM 模型', embedding: false, buttons: [{ id: 'openai', label: '添加 OpenAI 兼容模型' }, { id: 'claude', label: '添加 Anthropic 模型' }] },
+  { id: 'embedding', title: 'Embedding 模型', embedding: true, buttons: [{ id: 'openai-embedding', label: '添加向量嵌入模型' }] }
+]
+const modelCategories = [...modelGroups, { id: 'free', title: '免费模型' }]
+const activeCategory = ref('llm')
+const freeModels = ref([])
+const hasOpenCodeKey = ref(false)
+const openCodeApiKey = ref('')
+const clearOpenCodeKey = ref(false)
 const version = ref('')
 const busy = ref(false)
 const notice = ref('')
 const error = ref('')
 let clientId = 0
+let invalidCategoryPending = false
 
 const apply = data => {
   version.value = data.version
+  freeModels.value = data.openCodeFree?.models ?? []
+  hasOpenCodeKey.value = data.openCodeFree?.hasApiKey ?? false
+  openCodeApiKey.value = ''
+  clearOpenCodeKey.value = false
   rows.value = data.providers.map(row => ({
     ...row, clientId: ++clientId, presetId: detectPreset(row), apiKey: '', savedProtocol: row.protocol, savedBaseUrl: row.baseUrl
   }))
@@ -132,6 +171,22 @@ function explainWorkspacePlaceholder(event) {
   if (!event.target.hasAttribute('aria-describedby') || !hasWorkspacePlaceholder(event.target.value)) return
   event.preventDefault()
   event.target.focus()
+}
+
+function showInvalidCategory(event) {
+  const field = event.target
+  const category = field.closest('[data-model-category]')?.dataset.modelCategory
+  if (!category || category === activeCategory.value) return
+  event.preventDefault()
+  if (invalidCategoryPending) return
+  invalidCategoryPending = true
+  nextTick(() => {
+    activeCategory.value = category
+    nextTick(() => {
+      invalidCategoryPending = false
+      field.reportValidity()
+    })
+  })
 }
 const needsKey = row => !row.hasApiKey || row.savedProtocol !== row.protocol || row.savedBaseUrl !== row.baseUrl
 
@@ -194,7 +249,8 @@ const save = async () => {
       reasoningEffort: protocol === 'OPENAI_COMPATIBLE' ? reasoningEffort : undefined,
       workspaceId: protocol === 'DASHSCOPE' ? workspaceId : undefined
     }))
-    const { data } = await saveModelProviders({ version: version.value, providers })
+    const openCodeFree = { apiKey: clearOpenCodeKey.value ? undefined : openCodeApiKey.value, clear: clearOpenCodeKey.value }
+    const { data } = await saveModelProviders({ version: version.value, providers, openCodeFree })
     apply(data)
     notice.value = '已保存，对后续请求生效。'
   } catch (failure) {
@@ -209,14 +265,15 @@ onMounted(reload)
 
 <style scoped>
 .model-settings { max-width: 980px; }
-.settings-form { display: grid; gap: 14px; }
+.settings-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
 .settings-hint { margin: 0; color: var(--muted); font-size: 13px; }
 .ui-notice { margin: 0 0 14px; }
-.provider { display: grid; gap: 14px; margin: 0; padding: 16px; }
+.provider { display: grid; grid-template-columns: minmax(0, 1fr); min-inline-size: 0; gap: 14px; margin: 0; padding: 16px; }
 .provider-heading, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
 .provider-heading { justify-content: space-between; }
-.provider-heading h2 .ui-pill { margin-inline-start: 8px; }
-.provider-heading h2 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.model-categories { margin-bottom: 16px; }
+.provider-heading h3 { margin: 0; font-size: 16px; overflow-wrap: anywhere; }
+.free-models { margin: 0; padding-inline-start: 20px; overflow-wrap: anywhere; }
 .fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px 14px; }
 .fields label { display: grid; align-content: start; gap: 5px; }
 label, summary { color: var(--muted); font-size: 13px; }

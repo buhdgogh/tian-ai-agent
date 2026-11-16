@@ -11,12 +11,14 @@ public class KnowledgeAnswerService implements KnowledgeIndex {
     private final IndexService indexService;
     private final AnswerModel model;
     private final EvidenceAssessmentService evidenceAssessment;
+    private final WikiGraphService wiki;
 
     public KnowledgeAnswerService(IndexService indexService, AnswerModel model,
-                       EvidenceAssessmentService evidenceAssessment) {
+                       EvidenceAssessmentService evidenceAssessment, WikiGraphService wiki) {
         this.indexService = indexService;
         this.model = model;
         this.evidenceAssessment = evidenceAssessment;
+        this.wiki = wiki;
     }
 
     @Override
@@ -45,6 +47,12 @@ public class KnowledgeAnswerService implements KnowledgeIndex {
 
     @Override
     public Answer queryWithSources(String spaceId, String question, int topK) {
+        if (question == null || question.isBlank()) throw new IllegalArgumentException("question不能为空");
+        return wiki.answer(spaceId, question, Math.max(1, Math.min(topK, 20)), model)
+                .orElseGet(() -> answerFromChunks(spaceId, question, topK));
+    }
+
+    Answer answerFromChunks(String spaceId, String question, int topK) {
         Retrieval retrieval = retrieve(spaceId, question, topK);
         List<Evidence> sources = retrieval.sources();
         EvidenceAssessmentService.Assessment assessment = evidenceAssessment.assess(sources);

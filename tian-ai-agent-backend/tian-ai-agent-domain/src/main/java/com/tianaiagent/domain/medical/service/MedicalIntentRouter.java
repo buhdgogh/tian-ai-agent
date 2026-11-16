@@ -59,7 +59,10 @@ public class MedicalIntentRouter {
     }
 
     public RoutingDecision route(String message, List<Message> history, boolean medical) {
+        // 1️⃣ 空消息校验
         if (message == null || message.isBlank()) throw new IllegalArgumentException("消息不能为空");
+
+        // 2️⃣ 医疗急症短路
         var risk = medical ? safetyService.assess(message) : null;
         String riskLevel = risk == null ? "UNASSESSED" : risk.level();
         if (risk != null && risk.emergency()) {
@@ -67,6 +70,7 @@ public class MedicalIntentRouter {
                     "KEYWORD", false, riskLevel);
         }
 
+        // 3️⃣ 工具清单请求的硬匹配
         var inventory = TOOL_INVENTORY_REQUEST.matcher(
                 message.toLowerCase(Locale.ROOT).replaceAll("\\s+|[?？。！!]+$", ""));
         if (inventory.matches()) {
@@ -74,6 +78,7 @@ public class MedicalIntentRouter {
             return new RoutingDecision(message.trim(), List.of(intent), 1.0, "KEYWORD", false, riskLevel);
         }
 
+        // 4️⃣ 关键词打分
         Map<String, List<String>> keywords = medical ? KEYWORDS : GENERAL_KEYWORDS;
         Map<String, Integer> scores = keywordScores(message, keywords);
         List<Map.Entry<String, Integer>> matched = scores.entrySet().stream()
@@ -86,6 +91,7 @@ public class MedicalIntentRouter {
                     "KEYWORD", false, riskLevel);
         }
 
+        // 5️⃣ 上下文改写 + LLM 分类
         String standalone = rewrite(message, history);
         try {
             List<String> allowed = new ArrayList<>(keywords.keySet());

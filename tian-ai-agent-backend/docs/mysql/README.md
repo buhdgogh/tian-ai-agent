@@ -1,6 +1,8 @@
 # MySQL 部署配置
 
-Spring Boot 在 Windows 本机运行，MySQL 由 [Docker Compose](../docker/compose.yml) 管理。后端默认使用 `root` 连接 `127.0.0.1:13306` 上的 `tian_ai_agent`。在后端根目录 `.env` 设置 `MYSQL_PASSWORD`，再执行 `docker compose --env-file .env -f docs/docker/compose.yml up -d --wait mysql`。可通过 `MYSQL_PORT` 和 `MYSQL_DATABASE` 覆盖默认值。MySQL 数据保存在 `mysql_workspace_data` 卷中。
+在后端根目录的 `.env` 中设置 `MYSQL_PASSWORD`，再执行 `docker compose --env-file .env -f docs/docker/compose.yml up -d --wait mysql` 启动 MySQL 8.0.33。容器首次初始化 `mysql_workspace_8033_data` 卷时，会创建 `MYSQL_DATABASE` 指定的数据库并执行 `tian_ai_agent.sql`。默认库名为 `tian_ai_agent`，宿主机端口通过 `MYSQL_PORT` 设置，默认是 `13306`。
+
+已有工作台数据库运行在宿主机时，在 `.env` 中将 `WORKSPACE_MYSQL_PORT` 设为该实例的端口，例如 `3306`。此配置只影响后端连接，Compose 仍使用 `MYSQL_PORT` 发布容器端口。
 
 ## 启用工作台 MySQL 持久化
 
@@ -18,8 +20,10 @@ Spring Boot 在 Windows 本机运行，MySQL 由 [Docker Compose](../docker/comp
 
 将本地配置中的 JDBC URL 指向实际数据库。初始化脚本可重复执行。
 
-- `agent_conversation` 保存会话标题、所有者、会话类型、检索范围和更新时间。`memory_space` 对应当前的 `medical-agent`、`medical-advisor` 和 `medical-rag`。`storage_id` 沿用 `ConversationScope` 生成的带作用域会话 ID。`scope_id` 存知识库 ID，无知识库的工作台会话用 `general`，旧接口的无空间会话用空字符串。
-- `agent_conversation_message` 按自增 ID 保留会话内的消息顺序。`role` 和 `content` 保存消息角色和正文，`tool_calls` 和 `tool_responses` 保留工具调用 ID、参数和返回值，便于还原 ReAct 上下文。删除会话行会级联删除该会话的消息。
+升级前先停止使用旧表名的后端实例。首次启动新版后端时，初始化脚本会用一条 `RENAME TABLE` 将 `agent_conversation` 和 `agent_conversation_message` 原地改为 `agent_session` 和 `agent_session_message`，保留数据和外键。也可以在目标库中手动运行初始化脚本。旧表与新表并存时，MySQL 会拒绝覆盖，需先核对两套表的数据。
+
+- `agent_session` 保存会话标题、所有者、会话类型、检索范围和更新时间。`memory_space` 对应当前的 `medical-agent`、`medical-advisor` 和 `medical-rag`。`storage_id` 沿用 `ConversationScope` 生成的带作用域会话 ID。`scope_id` 存知识库 ID，无知识库的工作台会话用 `general`，旧接口的无空间会话用空字符串。
+- `agent_session_message` 按自增 ID 保留会话内的消息顺序。`role` 和 `content` 保存消息角色和正文，`tool_calls` 和 `tool_responses` 保留工具调用 ID、参数和返回值，便于还原 ReAct 上下文。删除会话行会级联删除该会话的消息。
 - 后端用访问令牌和已校验的会话范围生成存储 ID。首条用户消息会创建会话，ReAct 用户消息先于模型生成提交，工具记录和回答随执行追加。每次追加与会话时间更新处于同一事务。历史接口读取完整历史，模型上下文按 `agent.memory.max-messages` 读取最近消息。
 
 开启 `import-legacy-history` 时，`agent.memory.backend` 指定旧历史来自 Redis 还是本地文件。后端启动会导入仍可读取的旧会话和消息，已入库的会话会跳过。切换存储时请让新后端连接原 Redis 或原文件数据目录。删除会话会清理旧存储中的对应历史，并由 MySQL 外键清理消息。只有 MySQL 数据的新环境可关闭 `import-legacy-history`。

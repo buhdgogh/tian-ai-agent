@@ -17,10 +17,13 @@
         <button v-if="workspace && !workspaceLocked" type="button" class="ui-button" :disabled="pickingWorkspace || preparingWorkspace || status === 'connecting'"
           aria-label="移除本地工作区" @click="clearWorkspace">移除</button>
         <select id="agent-model" class="ui-field composer-model" aria-label="选择模型"
-          :value="modelProviderId || ''" :disabled="!modelProviders.length"
+          :value="modelProviderId || ''" :disabled="!modelProviders.length && !configuredFreeModels.length"
           @change="emit('update:modelProviderId', $event.target.value)">
           <option value="">模型 · 自动选择</option>
           <option v-for="provider in modelProviders" :key="provider.id" :value="provider.id">{{ provider.model }} · {{ provider.id }}</option>
+          <optgroup v-if="configuredFreeModels.length" label="OpenCode 免费模型">
+            <option v-for="model in configuredFreeModels" :key="model" :value="'opencode-free:' + model">{{ model }}</option>
+          </optgroup>
         </select>
         <details v-if="skills.length" ref="skillPicker" class="composer-skills">
           <summary class="ui-button">Skills{{ skillIds.length ? ' · ' + skillIds.length : '' }}</summary>
@@ -42,7 +45,7 @@
 </template>
 
 <script setup>
-import { nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import ChatRoom from '../components/ChatRoom.vue'
 import { streamAgentDispatch, getSessionMessages, getTask, getAgentPresets, getApiToken, replyWorkspaceRead } from '../api'
 import { readLocalWorkspace } from '../utils/localWorkspace'
@@ -54,8 +57,10 @@ const props = defineProps({
   spaceId: String,
   medical: Boolean,
   modelProviderId: String,
-  modelProviders: { type: Array, default: () => [] }
+  modelProviders: { type: Array, default: () => [] },
+  openCodeFree: { type: Object, default: null }
 })
+const configuredFreeModels = computed(() => props.openCodeFree?.hasApiKey ? props.openCodeFree.models ?? [] : [])
 const emit = defineEmits(['update-history', 'update-chat-id', 'chat-activity', 'update:modelProviderId'])
 const chatRoom = ref(null)
 const workspace = shallowRef(null)

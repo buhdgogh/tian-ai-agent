@@ -39,6 +39,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 @SpringBootTest(classes = TianAiAgentAdminApplication.class, properties = {
         "agent.persistence.mysql.enabled=false",
         "agent.access.admin-token=embedding-admin-token-123456789",
+        "agent.access.users[0].id=embedding_reader",
+        "agent.access.users[0].token=embedding-reader-token-123456789",
         "agent.rag.semantic-cache.enabled=false",
         "doc-mcp.enabled=true",
         "doc-mcp.vector-store=local",
@@ -133,6 +135,17 @@ class KnowledgeEmbeddingIntegrationTest {
             version = saveSettings(version, List.of(row)).path("version").asText();
         } finally {
             saveSettings(version, List.of());
+        }
+    }
+
+    @Test
+    void requiresAnExplicitEmbeddingModelForEveryNewSpace() throws Exception {
+        for (String body : List.of("{\"name\":\"General\"}",
+                "{\"name\":\"Medical\",\"medical\":true,\"embeddingProviderId\":\"  \"}")) {
+            mvc.perform(post("/knowledge-base/spaces").header("Authorization", ADMIN)
+                            .contentType(MediaType.APPLICATION_JSON).content(body))
+                    .andExpect(status().isBadRequest())
+                    .andExpect(jsonPath("$.code").value("INVALID_ARGUMENT"));
         }
     }
 

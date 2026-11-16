@@ -39,7 +39,7 @@
     <div v-if="desktopReady" class="app-layout" :class="{ 'chat-layout': showSidebar }">
       <AppSidebar v-if="showSidebar" :current-chat-id="currentChatId" :medical="isMedicalSpace" :history-list="historyList"
         @new-chat="handleNewChat" @select-chat="handleSelectChat" @delete-chat="handleDeleteChat" @clear-chat="handleClearChat" />
-      <main class="main-content">
+      <main class="main-content" :class="{ 'model-settings-scroll': route.name === 'ModelSettings' }">
         <div v-if="showSpaceSelector" class="scope-bar">
           <div><WorkspaceIcon name="agent" /><strong>Agent 问答</strong></div>
           <label for="agent-space"><span>检索范围</span>
@@ -50,7 +50,7 @@
           </label>
         </div>
         <RouterView :chat-id-prop="currentChatId" :space-id="spaceId || undefined" :medical="isMedicalSpace"
-          v-bind="showSidebar ? { modelProviders, modelProviderId: modelProviders.length ? modelProviderId : '' } : {}"
+          v-bind="showSidebar ? { modelProviders, modelProviderId, openCodeFree } : {}"
           @update:model-provider-id="modelProviderId = $event" @space-created="addSpace" @space-deleted="removeSpace" @update-history="loadHistory" @update-chat-id="handleUpdateChatId"
           @chat-activity="promoteChat" />
       </main>
@@ -91,6 +91,7 @@ let historyRequest = 0
 const spaceId = ref('')
 const modelProviderId = ref('')
 const modelProviders = ref([])
+const openCodeFree = ref(null)
 const spaces = ref([])
 const isMedicalSpace = computed(() => spaces.value.some(space => space.id === spaceId.value && space.medical))
 const addSpace = space => {
@@ -169,12 +170,18 @@ watch(showSidebar, async (active, _, onCleanup) => {
   let cancelled = false
   onCleanup(() => { cancelled = true })
   modelProviders.value = []
+  openCodeFree.value = null
   try {
     const { data } = await getModelProviders()
     if (cancelled) return
+    openCodeFree.value = data.openCodeFree ?? null
     modelProviders.value = data.providers.filter(provider => provider.enabled && provider.hasApiKey && provider.protocol !== 'OPENAI_EMBEDDING')
       .sort((a, b) => a.priority - b.priority)
-    if (!modelProviders.value.some(provider => provider.id === modelProviderId.value)) modelProviderId.value = ''
+    const freeModelSelected = openCodeFree.value?.hasApiKey
+      && openCodeFree.value.models.some(model => 'opencode-free:' + model === modelProviderId.value)
+    if (!freeModelSelected && !modelProviders.value.some(provider => provider.id === modelProviderId.value)) {
+      modelProviderId.value = ''
+    }
   } catch {
     if (!cancelled) modelProviderId.value = ''
   }
@@ -272,6 +279,7 @@ const handleClearChat = async () => {
 .access-form div { display: flex; justify-content: flex-end; gap: 6px; }
 .app-layout { display: flex; flex: 1; min-height: 0; }
 .main-content { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; }
+.model-settings-scroll { scrollbar-gutter: stable; }
 .chat-layout .main-content { overflow: hidden; }
 .scope-bar {
   display: flex;

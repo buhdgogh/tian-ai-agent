@@ -3,7 +3,18 @@
 SET NAMES utf8mb4;
 
 -- 会话与消息历史
-CREATE TABLE IF NOT EXISTS agent_conversation (
+-- 旧库一次改名两张表，保留数据及外键。若旧表和新表并存，RENAME 会拒绝覆盖。
+SET @agent_session_ddl = IF(
+    EXISTS (SELECT 1 FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name IN ('agent_conversation', 'agent_conversation_message')),
+    'RENAME TABLE agent_conversation TO agent_session, agent_conversation_message TO agent_session_message',
+    'DO 0'
+);
+PREPARE agent_session_migration FROM @agent_session_ddl;
+EXECUTE agent_session_migration;
+DEALLOCATE PREPARE agent_session_migration;
+
+CREATE TABLE IF NOT EXISTS agent_session (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     owner_id VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
     memory_space VARCHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -18,7 +29,7 @@ CREATE TABLE IF NOT EXISTS agent_conversation (
     KEY idx_conversation_listing (owner_id, memory_space, scope_id, updated_at, id)
 ) ENGINE = InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 
-CREATE TABLE IF NOT EXISTS agent_conversation_message (
+CREATE TABLE IF NOT EXISTS agent_session_message (
     id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     conversation_id BIGINT UNSIGNED NOT NULL,
     role VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
@@ -29,7 +40,7 @@ CREATE TABLE IF NOT EXISTS agent_conversation_message (
     PRIMARY KEY (id),
     KEY idx_conversation_message_order (conversation_id, id),
     CONSTRAINT fk_conversation_message_conversation
-        FOREIGN KEY (conversation_id) REFERENCES agent_conversation (id) ON DELETE CASCADE,
+        FOREIGN KEY (conversation_id) REFERENCES agent_session (id) ON DELETE CASCADE,
     CONSTRAINT chk_conversation_message_role
         CHECK (role IN ('USER', 'ASSISTANT', 'TOOL', 'SYSTEM'))
 ) ENGINE = InnoDB DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;

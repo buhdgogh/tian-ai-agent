@@ -28,7 +28,9 @@ class ModelProviderSettingsController {
     ModelProviderSettingsService.Settings save(@RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity,
                                                @RequestBody ModelProviderSettingsRequest request) {
         if (request.providers() == null || request.providers().size() > 20) throw new IllegalArgumentException("最多配置 20 个模型");
-        return settings.save(identity.ownerId(), request.version(), request.providers().stream().map(this::convert).toList());
+        var free = request.openCodeFree();
+        return settings.save(identity.ownerId(), request.version(), request.providers().stream().map(this::convert).toList(),
+                free == null ? null : clean(free.apiKey()), free != null && free.clear());
     }
 
     @ExceptionHandler(ModelProviderSettingsService.OriginNotAllowed.class)

@@ -102,6 +102,13 @@ agent:
   models:
     timeout: 60s
     cooldown: 30s
+    ollama:
+      enabled: ${TIAN_OLLAMA_ENABLED:false}
+      model: ${TIAN_OLLAMA_MODEL:qwen3:0.6b}
+    opencode:
+      executable: ${OPENCODE_EXECUTABLE:opencode}
+      api-key: ${OPENCODE_API_KEY:}
+      model: ${OPENCODE_MODEL:}
     # 用户可配置这些来源下的 API 地址。自建网关填入完整的 scheme://host[:port]。
     allowed-user-origins:
       - https://api.deepseek.com
@@ -118,7 +125,7 @@ agent:
     mysql:
       enabled: true
       import-legacy-history: true
-      jdbc-url: jdbc:mysql://127.0.0.1:${MYSQL_PORT:13306}/${MYSQL_DATABASE:tian_ai_agent}?serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
+      jdbc-url: jdbc:mysql://127.0.0.1:${WORKSPACE_MYSQL_PORT:${MYSQL_PORT:13306}}/${MYSQL_DATABASE:tian_ai_agent}?serverTimezone=Asia/Shanghai&characterEncoding=UTF-8
       username: root
   mcp:
     # 只填写信任的 MCP 服务来源，例如 https://tools.example.com，不含端点路径。
@@ -163,4 +170,5 @@ agent:
       max-entries: 500
       ttl-hours: 12
   access:
+    users: []
     admin-token: admin-sadgaikfgaiugfiugfiuasgiua

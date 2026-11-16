@@ -32,20 +32,30 @@ public class ModelProviderSettingsService {
     }
 
     public synchronized Settings list(String owner) {
-        List<View> rows = providers.getOrDefault(owner, List.of()).stream().map(View::from).toList();
-        return new Settings(version(owner), rows);
+        var saved = providers.getOrDefault(owner, List.of());
+        List<View> rows = saved.stream().filter(provider -> provider.protocol() != ModelProvider.Protocol.OPENCODE_FREE)
+                .map(View::from).toList();
+        boolean hasKey = saved.stream().anyMatch(provider -> provider.protocol() == ModelProvider.Protocol.OPENCODE_FREE);
+        return new Settings(version(owner), rows, new OpenCodeFree(ModelProvider.OPENCODE_FREE_MODELS, hasKey));
     }
 
     public synchronized Optional<ModelProvider> embeddingProvider(String owner, String id) {
         return providers.getOrDefault(owner, List.of()).stream()
                 .filter(item -> item.id().equals(id) && item.enabled()
+                        && item.apiKey() != null && !item.apiKey().isBlank()
                         && item.protocol() == ModelProvider.Protocol.OPENAI_EMBEDDING && allowed.test(item))
                 .findFirst();
     }
 
     public synchronized Settings save(String owner, String expectedVersion, List<ModelProvider> requested) {
+        return save(owner, expectedVersion, requested, null, false);
+    }
+
+    public synchronized Settings save(String owner, String expectedVersion, List<ModelProvider> requested,
+                                      String openCodeApiKey, boolean clearOpenCodeKey) {
         if (!version(owner).equals(expectedVersion)) throw new Conflict();
         if (requested == null || requested.size() > 20) throw new IllegalArgumentException("最多配置 20 个模型");
+        if (clearOpenCodeKey && openCodeApiKey != null) throw new IllegalArgumentException("不能同时更新和删除 OpenCode API Key");
 
         Map<String, ModelProvider> previous = new HashMap<>();
         providers.getOrDefault(owner, List.of()).forEach(item -> previous.put(item.id(), item));
@@ -53,6 +63,9 @@ public class ModelProviderSettingsService {
         var resolved = new ArrayList<ModelProvider>();
         for (ModelProvider item : requested) {
             if (item == null) throw new IllegalArgumentException("模型配置不能为空");
+            if (item.protocol() == ModelProvider.Protocol.OPENCODE_FREE || ModelProvider.OPENCODE_FREE_ID.equals(item.id())) {
+                throw new IllegalArgumentException("请通过 OpenCode 免费模型配置 API Key");
+            }
             if (item.apiKey() == null || item.apiKey().isBlank()) {
                 ModelProvider old = previous.get(item.id());
                 if (old == null || old.protocol() != item.protocol() || !Objects.equals(old.baseUrl(), item.baseUrl())) {
@@ -64,6 +77,15 @@ public class ModelProviderSettingsService {
             if (!ids.add(item.id())) throw new IllegalArgumentException("提供商 ID 必须唯一");
             if (item.enabled() && !allowed.test(item)) throw new OriginNotAllowed();
             resolved.add(item);
+        }
+        if (openCodeApiKey != null) {
+            var openCode = ModelProvider.openCodeFree(openCodeApiKey);
+            openCode.validate();
+            resolved.add(openCode);
+        } else if (!clearOpenCodeKey) {
+            Optional.ofNullable(previous.get(ModelProvider.OPENCODE_FREE_ID))
+                    .filter(provider -> provider.protocol() == ModelProvider.Protocol.OPENCODE_FREE)
+                    .ifPresent(resolved::add);
         }
         List<ModelProvider> rows = List.copyOf(resolved);
         Runnable activate = prepareRoutes.apply(owner, rows);
@@ -77,7 +99,9 @@ public class ModelProviderSettingsService {
 
     private String version(String owner) { return versions.getOrDefault(owner, initialVersion); }
 
-    public record Settings(String version, List<View> providers) {}
+    public record Settings(String version, List<View> providers, OpenCodeFree openCodeFree) {}
+
+    public record OpenCodeFree(List<String> models, boolean hasApiKey) {}
 
     public record View(String id, ModelProvider.Protocol protocol, String baseUrl, String model, int priority,
                        boolean enabled, boolean hasApiKey, String workspaceId, boolean streamUsage,

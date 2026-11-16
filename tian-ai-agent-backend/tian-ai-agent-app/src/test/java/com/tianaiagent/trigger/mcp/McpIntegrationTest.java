@@ -55,6 +55,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @SpringBootTest(classes = TianAiAgentAdminApplication.class, properties = {
+        "agent.models.ollama.enabled=false",
         "agent.persistence.mysql.enabled=false",
         "agent.access.mcp-token=mcp-reader-test-token-123456789",
         "agent.access.admin-token=admin-test-token-123456789",
@@ -225,7 +226,7 @@ class McpIntegrationTest {
     @Test
     void cleansParsedMarkdownBeforePublishingOrIndexingAndOnParseCacheHit() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "文档清洗验证");
+        String space = createLegacySpace("文档清洗验证");
         String raw = """
                 # 操作说明
 
@@ -261,7 +262,7 @@ class McpIntegrationTest {
     @Test
     void autoParsingFallsBackToTikaAndKeepsMineruCacheSeparate() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "解析降级验证");
+        String space = createLegacySpace("解析降级验证");
         String source = "# 通用文档\n\n这段文字用于检查文档解析降级。";
         when(uploadRateLimiter.tryAcquire("admin")).thenReturn(new UploadRateLimiter.RateLimitResult(true, 9, 60));
         when(mineru.isAvailable()).thenReturn(true);
@@ -289,8 +290,8 @@ class McpIntegrationTest {
         mvc.perform(post("/knowledge-base/spaces").header("Authorization", reader)
                 .contentType(MediaType.APPLICATION_JSON).content("{\"name\":\"禁止创建\"}"))
                 .andExpect(status().isForbidden());
-        String first = createSpace(admin, "工程资料");
-        String second = createSpace(admin, "操作手册");
+        String first = createLegacySpace("工程资料");
+        String second = createLegacySpace("操作手册");
         mvc.perform(get("/knowledge-base/spaces").header("Authorization", reader))
                 .andExpect(jsonPath("$[?(@.id == '%s')].name".formatted(first)).isNotEmpty());
 
@@ -331,6 +332,12 @@ class McpIntegrationTest {
                     .findFirst().orElseThrow();
             assertThat(tool.call("{\"question\":\"压缩机检修\",\"topK\":5}"))
                     .contains(id).doesNotContain("space-other-manual");
+            var retrieveTool = java.util.Arrays.stream(agentTools.forSpace(first))
+                    .filter(callback -> callback.getToolDefinition().name().equals("retrieveKnowledge"))
+                    .findFirst().orElseThrow();
+            var retrieved = mapper.readTree(retrieveTool.call("{\"question\":\"压缩机检修\"}"));
+            assertThat(retrieved.path("sources").findValuesAsText("documentId")).containsOnly(id);
+            assertThat(retrieved.has("answer")).isFalse();
 
             var evaluation = mvc.perform(post("/rag-evaluations").header("Authorization", admin)
                     .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of(
@@ -362,14 +369,11 @@ class McpIntegrationTest {
     }
 
     @Test
-    void createsTypedMedicalSpaceAlongsideLegacySpaceAndAppliesTriageOnlyThere() throws Exception {
+    void appliesTriageInTypedMedicalSpaces() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        var created = mvc.perform(post("/knowledge-base/spaces").header("Authorization", admin)
-                        .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"name\":\"药品说明书\",\"medical\":true}"))
-                .andExpect(status().isCreated()).andExpect(jsonPath("$.medical").value(true))
-                .andReturn().getResponse();
-        String spaceId = mapper.readTree(created.getContentAsString()).path("id").asText();
+        var medical = com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace.create("药品说明书", true, null);
+        repository.addSpace(medical);
+        String spaceId = medical.id();
         mvc.perform(get("/knowledge-base/spaces").header("Authorization", admin))
                 .andExpect(jsonPath("$[?(@.id == 'medical')].medical").value(org.hamcrest.Matchers.contains(true)));
         assertThat(knowledgeIndex.space(spaceId).medical()).isTrue();
@@ -390,8 +394,8 @@ class McpIntegrationTest {
     void deletesSpaceOnlyWithTheAuthenticatedAdminName() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
         String reader = "Bearer user-test-token-123456789";
-        String space = createSpace(admin, "待删除知识库");
-        String other = createSpace(admin, "保留知识库");
+        String space = createLegacySpace("待删除知识库");
+        String other = createLegacySpace("保留知识库");
         when(uploadRateLimiter.tryAcquire("admin")).thenReturn(new UploadRateLimiter.RateLimitResult(true, 9, 60));
         String doc = uploadWikiSource(admin, space, "delete.md", "# 待删除页面\n\n内部知识资料。");
         String keep = uploadWikiSource(admin, other, "keep.md", "# 保留页面\n\n其它空间的资料。");
@@ -452,8 +456,8 @@ class McpIntegrationTest {
     @Test
     void rejectsConcurrentDuplicateContentWithinTheSameSpace() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "导入去重");
-        String other = createSpace(admin, "导入去重隔离");
+        String space = createLegacySpace("导入去重");
+        String other = createLegacySpace("导入去重隔离");
         when(uploadRateLimiter.tryAcquire("admin")).thenReturn(new UploadRateLimiter.RateLimitResult(true, 9, 60));
         String raw = "# 相同原文\n同一知识库只登记一次。";
         var first = CompletableFuture.supplyAsync(() -> uploadResponse(admin, space, "first.md", raw));
@@ -481,7 +485,7 @@ class McpIntegrationTest {
     @Test
     void rejectsIdenticalLegacyFilesWithoutAnUploadFingerprint() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "旧版导入去重");
+        String space = createLegacySpace("旧版导入去重");
         String raw = "# 旧版原文\n文件早于 SHA-256 登记功能。";
         String id = "a".repeat(32);
         var folder = java.nio.file.Path.of(FileConstant.FILE_SAVE_DIR, "knowledge-base", "spaces", space);
@@ -497,7 +501,7 @@ class McpIntegrationTest {
     @Test
     void compilesTwoSegmentsOfOneDocumentInParallel() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "单文档并行编译");
+        String space = createLegacySpace("单文档并行编译");
         String docId = "two-segments";
         repository.replaceDocument(space, new KnowledgeRepository.DocumentRecord(docId, "两段原文", "", "", Map.of()), List.of());
         var parsed = java.nio.file.Path.of(docMcpProperties.getParsedDir(), space);
@@ -536,8 +540,8 @@ class McpIntegrationTest {
     void compilesSourceMarkdownIntoVersionedWikiAndRestrictsPagesToTheirSpace() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
         String reader = "Bearer user-test-token-123456789";
-        String space = createSpace(admin, "Wiki 工程手册");
-        String other = createSpace(admin, "Wiki 其他资料");
+        String space = createLegacySpace("Wiki 工程手册");
+        String other = createLegacySpace("Wiki 其他资料");
         when(uploadRateLimiter.tryAcquire("admin")).thenReturn(new UploadRateLimiter.RateLimitResult(true, 9, 60));
         String marker = "RAW_ONE_" + "A".repeat(90);
         String first = uploadWikiSource(admin, space, "worker.md", "# Worker\n\n" + marker + " 使用异步索引。");
@@ -627,7 +631,7 @@ class McpIntegrationTest {
     @Test
     void publishesExtractedWikiWhenConsolidationModelsAreUnavailable() throws Exception {
         String admin = "Bearer admin-test-token-123456789";
-        String space = createSpace(admin, "Wiki 模型降级测试");
+        String space = createLegacySpace("Wiki 模型降级测试");
         when(uploadRateLimiter.tryAcquire("admin")).thenReturn(new UploadRateLimiter.RateLimitResult(true, 9, 60));
         uploadWikiSource(admin, space, "worker.md", "# Worker\n\nWORKER_RAW 使用异步索引。");
         uploadWikiSource(admin, space, "index.md", "# 异步索引\n\n索引由任务队列调度。");
@@ -671,11 +675,10 @@ class McpIntegrationTest {
         return record.path("id").asText();
     }
 
-    private String createSpace(String admin, String name) throws Exception {
-        var response = mvc.perform(post("/knowledge-base/spaces").header("Authorization", admin)
-                        .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of("name", name))))
-                .andExpect(status().isCreated()).andReturn().getResponse();
-        return mapper.readTree(response.getContentAsString()).path("id").asText();
+    private String createLegacySpace(String name) {
+        var space = com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace.create(name, false, null);
+        repository.addSpace(space);
+        return space.id();
     }
 
     private static MockHttpServletRequestBuilder mcp(String body) {

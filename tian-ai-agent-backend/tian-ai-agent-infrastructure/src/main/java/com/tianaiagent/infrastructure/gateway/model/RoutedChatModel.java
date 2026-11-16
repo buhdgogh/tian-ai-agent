@@ -1,6 +1,7 @@
 package com.tianaiagent.infrastructure.gateway.model;
 
 import com.tianaiagent.domain.agent.model.entity.AgentRun;
+import com.tianaiagent.domain.agent.model.valobj.ModelProvider;
 import com.tianaiagent.domain.agent.service.AgentRunAudit;
 import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.types.exception.ModelUnavailableException;
@@ -36,7 +37,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** 厂商协议由 ChatModel 适配。路由只在本次调用可安全重放时切换。 */
 public final class RoutedChatModel implements ChatModel {
     private final List<Group> defaults;
-    private final Map<String, List<Group>> ownerGroups = new ConcurrentHashMap<>();
+    private final Map<String, OwnerRoutes> ownerGroups = new ConcurrentHashMap<>();
     private final Duration timeout;
     private final Duration cooldown;
 
@@ -47,8 +48,14 @@ public final class RoutedChatModel implements ChatModel {
     }
 
     public Runnable prepareTargets(String ownerId, List<Target> targets, boolean custom) {
-        if (!custom) return () -> ownerGroups.remove(ownerId);
-        List<Group> next = groupTargets(targets);
+        return prepareTargets(ownerId, targets, custom, List.of());
+    }
+
+    public Runnable prepareTargets(String ownerId, List<Target> targets, boolean custom, List<Target> selectedOnly) {
+        if (!custom && selectedOnly.isEmpty()) return () -> ownerGroups.remove(ownerId);
+        var explicit = new TreeMap<String, Route>();
+        selectedOnly.forEach(target -> explicit.put(target.provider(), new Route(target)));
+        var next = new OwnerRoutes(custom ? groupTargets(targets) : defaults, Map.copyOf(explicit));
         return () -> ownerGroups.put(ownerId, next);
     }
 
@@ -61,7 +68,9 @@ public final class RoutedChatModel implements ChatModel {
 
     public boolean hasPersonalRoutes() {
         AgentRunAudit.Run run = AgentRunContext.current();
-        return run != null && ownerGroups.containsKey(run.ownerId());
+        OwnerRoutes owner = run == null ? null : ownerGroups.get(run.ownerId());
+        return owner != null && (owner.automatic() != defaults
+                || run.modelProviderId() != null && owner.explicit().containsKey(run.modelProviderId()));
     }
 
     @Override
@@ -87,7 +96,7 @@ public final class RoutedChatModel implements ChatModel {
                 Failure failure = failure(e);
                 attempt.record("FAILED", failure.reason());
                 if (failure.retriable()) route.cooldown(cooldown);
-                if (!failure.retriable() || attempt.usedTool.get()) throw failed(failure);
+                if (!failure.retriable() || attempt.usedTool.get()) throw modelFailure(e, failure);
             }
         }
         throw unavailable(routes.isEmpty());
@@ -121,18 +130,29 @@ public final class RoutedChatModel implements ChatModel {
                 .doOnComplete(() -> attempt.record("SUCCESS", null))
                 .doOnCancel(() -> attempt.record("CANCELLED", null))
                 .onErrorResume(error -> {
+                    if (error instanceof TimeoutException
+                            && route.target.provider().startsWith(ModelProvider.OPENCODE_FREE_ROUTE_PREFIX)) {
+                        error = new ModelUnavailableException("OPENCODE_TIMEOUT", "OpenCode 请求超时，请稍后重试。");
+                    }
                     Failure failure = failure(error);
                     attempt.record("FAILED", failure.reason());
                     if (failure.retriable()) route.cooldown(cooldown);
                     if (emitted.get() || attempt.usedTool.get() || !failure.retriable()) {
-                        return Flux.error(failed(failure));
+                        return Flux.error(modelFailure(error, failure));
                     }
                     return stream(prompt, routes, next, run);
                 });
     }
 
     private List<Route> orderedRoutes(AgentRunAudit.Run run) {
-        List<Group> groups = run == null ? defaults : ownerGroups.getOrDefault(run.ownerId(), defaults);
+        OwnerRoutes owner = run == null ? null : ownerGroups.get(run.ownerId());
+        if (run != null && run.modelProviderId() != null
+                && run.modelProviderId().startsWith(ModelProvider.OPENCODE_FREE_ROUTE_PREFIX)) {
+            Route selected = owner == null ? null : owner.explicit().get(run.modelProviderId());
+            if (selected == null) throw new ModelUnavailableException("OPENCODE_KEY_REQUIRED", "请先在模型设置中保存 OpenCode API Key。");
+            return List.of(selected);
+        }
+        List<Group> groups = owner == null ? defaults : owner.automatic();
         List<Route> result = new ArrayList<>();
         for (Group group : groups) {
             List<Route> routes = group.routes;
@@ -152,6 +172,9 @@ public final class RoutedChatModel implements ChatModel {
 
     private static Failure failure(Throwable error) {
         for (Throwable cause = error; cause != null; cause = cause.getCause()) {
+            if (cause instanceof ModelUnavailableException model && model.code().startsWith("OPENCODE_")) {
+                return new Failure(model.code(), false);
+            }
             if (cause instanceof RestClientResponseException response) return httpFailure(response.getStatusCode().value());
             if (cause instanceof WebClientResponseException response) return httpFailure(response.getStatusCode().value());
             if (cause instanceof TimeoutException || cause instanceof java.net.http.HttpTimeoutException
@@ -173,6 +196,13 @@ public final class RoutedChatModel implements ChatModel {
     private static ModelUnavailableException failed(Failure failure) {
         return new ModelUnavailableException("MODEL_CALL_FAILED", "模型调用失败 (" + failure.reason() + ")，请查看运行日志。");
     }
+
+    private static ModelUnavailableException modelFailure(Throwable error, Failure failure) {
+        return error instanceof ModelUnavailableException model && model.code().startsWith("OPENCODE_")
+                ? model : failed(failure);
+    }
+
+    private record OwnerRoutes(List<Group> automatic, Map<String, Route> explicit) {}
 
     private ModelUnavailableException unavailable(boolean noRoutes) {
         return !noRoutes

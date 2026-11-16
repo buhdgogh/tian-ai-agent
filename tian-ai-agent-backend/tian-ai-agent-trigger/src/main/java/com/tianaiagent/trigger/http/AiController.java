@@ -3,6 +3,7 @@ package com.tianaiagent.trigger.http;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.tianaiagent.api.medical.ChatRequest;
 import com.tianaiagent.api.medical.MedicalEvidenceReport;
+import com.tianaiagent.domain.agent.adapter.port.StreamOutput;
 import com.tianaiagent.domain.medical.service.MedicalAdvisorService;
 import com.tianaiagent.domain.agent.service.MedicalDispatchService;
 import com.tianaiagent.domain.agent.service.AgentRunAudit;
@@ -15,7 +16,10 @@ import com.tianaiagent.domain.conversation.adapter.port.ConversationMemoryRegist
 import com.tianaiagent.domain.conversation.model.valobj.ConversationSummary;
 import com.tianaiagent.domain.knowledge.model.entity.KnowledgeSpace;
 import com.tianaiagent.domain.knowledge.service.KnowledgeBaseService;
+import com.tianaiagent.domain.medical.service.MedicalIntentRouter;
+import com.tianaiagent.domain.task.model.aggregate.TaskRecord;
 import com.tianaiagent.trigger.security.RequestIdentity;
+import com.tianaiagent.types.exception.ModelUnavailableException;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.core.task.AsyncTaskExecutor;
@@ -27,10 +31,15 @@ import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
 import reactor.core.publisher.Flux;
 
+import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.Future;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 /** 知识工作台对话、任务分发及兼容的医疗接口。 */
 @RestController
@@ -287,5 +296,116 @@ public class AiController {
     private String selectedSpace(String id) {
         String spaceId = KnowledgeSpace.optionalId(id);
         return spaceId == null ? null : knowledgeBaseService.space(spaceId).id();
+    }
+
+    private static final class SseAgentOutput implements StreamOutput {
+        private final SseEmitter emitter = new SseEmitter(180_000L);
+        private final AgentRunAudit.Run run;
+
+        SseAgentOutput(AgentRunAudit.Run run) {
+            this.run = run;
+            emitter.onTimeout(() -> run.finish("TIMEOUT"));
+            emitter.onError(error -> run.finish("FAILED"));
+            emitter.onCompletion(() -> run.finish("CANCELLED"));
+        }
+
+        SseEmitter emitter() { return emitter; }
+
+        @Override
+        public void send(String step) throws IOException { emitter.send(step); }
+
+        @Override
+        public void complete() throws IOException {
+            emitter.send("[DONE]");
+            run.finish("COMPLETED");
+            emitter.complete();
+        }
+
+        @Override
+        public void fail(Throwable error) {
+            run.finish("FAILED");
+            emitter.completeWithError(error);
+        }
+    }
+
+    private static final class SseDispatchOutput implements MedicalDispatchService.Output {
+        private final SseEmitter emitter = new SseEmitter(180_000L);
+        private final AgentRunAudit.Run run;
+        private final Runnable closeWorkspace;
+        private final AtomicBoolean closed = new AtomicBoolean();
+        private volatile Future<?> worker;
+
+        SseDispatchOutput(AgentRunAudit.Run run, Runnable closeWorkspace) {
+            this.run = run;
+            this.closeWorkspace = closeWorkspace;
+            emitter.onTimeout(() -> cancel("TIMEOUT"));
+            emitter.onError(error -> cancel("CANCELLED"));
+            emitter.onCompletion(() -> cancel("CANCELLED"));
+        }
+
+        SseEmitter emitter() { return emitter; }
+
+        void attach(Future<?> future) {
+            worker = future;
+            if (closed.get()) future.cancel(true);
+        }
+
+        void started() { send("run", Map.of("runId", run.id())); }
+        @Override public void route(MedicalIntentRouter.RoutingDecision decision) { send("route", decision); }
+        @Override public void workflow(TaskRecord task) { send("task", task); }
+        @Override public void thinking(int step) { send("thinking", Map.of("step", step)); }
+        @Override public void delta(String text) { send("delta", Map.of("text", text)); }
+        @Override public void tools(List<String> names) { send("tools", Map.of("names", names)); }
+        void workspaceRequest(LocalWorkspaceReads.Request request) { send("workspace_request", request); }
+
+        private void send(String type, Object payload) {
+            if (closed.get()) throw new CancellationException();
+            try {
+                emitter.send(SseEmitter.event().name(type).data(payload, MediaType.APPLICATION_JSON));
+            } catch (IOException e) {
+                throw new UncheckedIOException(e);
+            } catch (IllegalStateException e) {
+                throw new CancellationException();
+            }
+        }
+
+        void complete() {
+            send("done", Map.of());
+            finish("COMPLETED");
+        }
+
+        void fail(RuntimeException error) {
+            if (closed.get()) return;
+            if (error instanceof UncheckedIOException || error instanceof CancellationException) {
+                finish("CANCELLED");
+                return;
+            }
+            String message = error instanceof ModelUnavailableException
+                    ? error.getMessage() : "Agent 执行失败，请查看运行日志。";
+            try {
+                send("error", Map.of("message", message, "runId", run.id()));
+            } catch (UncheckedIOException | CancellationException ignored) {
+                finish("CANCELLED");
+                return;
+            }
+            finish("FAILED");
+        }
+
+        private void finish(String status) {
+            if (closed.compareAndSet(false, true)) {
+                closeWorkspace.run();
+                run.finish(status);
+                emitter.complete();
+            }
+        }
+
+        private void cancel(String status) {
+            if (closed.compareAndSet(false, true)) {
+                closeWorkspace.run();
+                Future<?> running = worker;
+                if (running != null) running.cancel(true);
+                run.finish(status);
+            }
+        }
     }
 }
