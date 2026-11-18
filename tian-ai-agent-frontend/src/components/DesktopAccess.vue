@@ -1,7 +1,7 @@
 <template>
   <dialog ref="dialog" class="desktop-access ui-panel" aria-labelledby="desktop-access-title" @cancel.prevent="cancel">
     <form @submit.prevent="connect">
-      <h2 id="desktop-access-title">连接 Tian 知识工作台</h2>
+      <h2 id="desktop-access-title">连接 Tian Agent 工作台</h2>
       <p>填写管理员提供的后端地址和访问令牌。连接成功后，你可以在模型设置中添加自己的 API Key。</p>
       <label for="desktop-api-url">后端 API 地址</label>
       <input id="desktop-api-url" v-model="address" class="ui-field" type="url" maxlength="500" required

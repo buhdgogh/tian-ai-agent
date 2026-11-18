@@ -10,6 +10,7 @@ import com.tianaiagent.domain.agent.service.AgentRunAudit;
 import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.agent.service.AgentPresetService;
 import com.tianaiagent.domain.agent.service.LocalWorkspaceReads;
+import com.tianaiagent.domain.agent.service.DesktopWorkspaceAgent;
 import com.tianaiagent.domain.medical.service.MedicalAgentService;
 import com.tianaiagent.domain.conversation.service.ConversationScope;
 import com.tianaiagent.domain.conversation.adapter.port.ConversationMemoryRegistry;
@@ -22,6 +23,7 @@ import com.tianaiagent.trigger.security.RequestIdentity;
 import com.tianaiagent.types.exception.ModelUnavailableException;
 import jakarta.annotation.Resource;
 import jakarta.servlet.http.HttpServletResponse;
+import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.core.task.AsyncTaskExecutor;
 import org.springframework.http.MediaType;
 import org.springframework.http.HttpStatus;
@@ -29,6 +31,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.servlet.mvc.method.annotation.SseEmitter;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 
 import java.io.IOException;
@@ -41,7 +44,7 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** 知识工作台对话、任务分发及兼容的医疗接口。 */
+/** Agent 工作台对话、任务分发及兼容的医疗接口。 */
 @RestController
 @RequestMapping("/ai")
 public class AiController {
@@ -58,6 +61,7 @@ public class AiController {
     @Resource private ConversationMemoryRegistry memoryRegistry;
     @Resource private AgentPresetService presets;
     @Resource private LocalWorkspaceReads localWorkspaces;
+    @Resource private DesktopWorkspaceAgent desktopWorkspaceAgent;
 
     @GetMapping("/sessions")
     public List<ConversationSummary> listSessions(
@@ -195,6 +199,82 @@ public class AiController {
         }
     }
 
+    @PostMapping(value = "/desktop-workspace/stream", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public SseEmitter desktopWorkspaceStream(@RequestBody ChatRequest request,
+            @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity,
+            @RequestParam(defaultValue = "false") boolean auto,
+            HttpServletRequest connection, HttpServletResponse response) {
+        requireDesktop(connection, identity);
+        request.validate();
+        List<String> recent = !auto || request.recentRequests() == null ? List.of() : request.recentRequests().stream()
+                .filter(text -> text != null && !text.isBlank()).limit(3).map(text -> text.substring(0, Math.min(700, text.length()))).toList();
+        if (request.message().length() > 12_000) throw new IllegalArgumentException("工作区任务最多 12000 字符");
+        response.setHeader("Cache-Control", "no-cache");
+        response.setHeader("X-Accel-Buffering", "no");
+        var run = runAudit.start(identity.ownerId(), auto ? "DESKTOP_DISPATCH" : "DESKTOP_WORKSPACE", null, request.modelProviderId());
+        var output = new SseDispatchOutput(run, () -> localWorkspaces.close(run.id()), 420_000L);
+        try {
+            output.attach(agentStreamExecutor.submit(() -> AgentRunContext.within(run, () -> {
+                try {
+                    output.started();
+                    output.workspacePhase(0, "判断是否使用工作区");
+                    var plan = desktopWorkspaceAgent.plan(request.message(), recent);
+                    if (plan.workspace() && plan.roles().isEmpty()) {
+                        output.delta("本轮计划中的角色都已跳过。");
+                    } else if (plan.workspace()) {
+                        localWorkspaces.openDesktop(run.id(), identity.ownerId(), output::desktopWorkspaceRequest);
+                        output.send("route", Map.of("strategy", "WORKSPACE_TEAM", "workspaceRoles", plan.roles()));
+                        output.workspacePhase(0, "本轮计划 · " + plan.steps());
+                        if (auto) {
+                            output.workspacePhase(0, "准备当前会话的 Docker 沙箱");
+                            AgentRunContext.stage("准备 Docker 沙箱", () -> {
+                                localWorkspaces.prepareDesktop(run.id());
+                                return null;
+                            });
+                        }
+                        desktopWorkspaceAgent.run(request.message(), plan, run, output::workspacePhase, output::delta);
+                    } else {
+                        WorkspaceConversation conversation = workspaceConversation(request, identity);
+                        String skillInstructions = presets.selectedSkillInstructions(identity.ownerId(), request.skillIds());
+                        memoryRegistry.touch(ConversationMemoryRegistry.MEDICAL_AGENT, conversation.chatId());
+                        dispatchService.stream(request.message(), conversation.chatId(), identity.ownerId(),
+                                conversation.spaceId(), conversation.medical(), output, skillInstructions);
+                    }
+                    output.complete();
+                } catch (RuntimeException e) {
+                    output.fail(e);
+                }
+                return null;
+            })));
+        } catch (RuntimeException e) {
+            output.fail(e);
+        }
+        return output.emitter();
+    }
+
+    @PostMapping("/desktop-workspace/{runId}/results/{requestId}")
+    public ResponseEntity<Void> desktopWorkspaceResult(@PathVariable String runId, @PathVariable String requestId,
+            @RequestBody JsonNode result, @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity,
+            HttpServletRequest connection) {
+        requireDesktop(connection, identity);
+        try {
+            return localWorkspaces.replyDesktop(identity.ownerId(), runId, requestId, result)
+                    ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.badRequest().build();
+        }
+    }
+
+    private static void requireDesktop(HttpServletRequest request, RequestIdentity identity) {
+        String peer = request.getRemoteAddr();
+        boolean loopback = "127.0.0.1".equals(peer) || "::1".equals(peer) || "0:0:0:0:0:0:0:1".equals(peer);
+        if (!loopback || request.getHeader("Origin") != null
+                || !"1".equals(request.getHeader("X-Tian-Desktop"))
+                || identity.role() == RequestIdentity.Role.MCP_READER) {
+            throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+        }
+    }
+
     @PostMapping("/medical/chat")
     public String chat(@RequestBody ChatRequest request, @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         request.validate();
@@ -329,15 +409,20 @@ public class AiController {
     }
 
     private static final class SseDispatchOutput implements MedicalDispatchService.Output {
-        private final SseEmitter emitter = new SseEmitter(180_000L);
+        private final SseEmitter emitter;
         private final AgentRunAudit.Run run;
         private final Runnable closeWorkspace;
         private final AtomicBoolean closed = new AtomicBoolean();
         private volatile Future<?> worker;
 
         SseDispatchOutput(AgentRunAudit.Run run, Runnable closeWorkspace) {
+            this(run, closeWorkspace, 180_000L);
+        }
+
+        SseDispatchOutput(AgentRunAudit.Run run, Runnable closeWorkspace, long timeoutMs) {
             this.run = run;
             this.closeWorkspace = closeWorkspace;
+            this.emitter = new SseEmitter(timeoutMs);
             emitter.onTimeout(() -> cancel("TIMEOUT"));
             emitter.onError(error -> cancel("CANCELLED"));
             emitter.onCompletion(() -> cancel("CANCELLED"));
@@ -357,6 +442,10 @@ public class AiController {
         @Override public void delta(String text) { send("delta", Map.of("text", text)); }
         @Override public void tools(List<String> names) { send("tools", Map.of("names", names)); }
         void workspaceRequest(LocalWorkspaceReads.Request request) { send("workspace_request", request); }
+        void desktopWorkspaceRequest(LocalWorkspaceReads.Request request) {
+            send("workspace_request", Map.of("runId", run.id(), "request", request));
+        }
+        void workspacePhase(int step, String name) { send("thinking", Map.of("step", step, "name", name)); }
 
         private void send(String type, Object payload) {
             if (closed.get()) throw new CancellationException();
@@ -370,7 +459,8 @@ public class AiController {
         }
 
         void complete() {
-            send("done", Map.of());
+            var sources = run.knowledgeSources();
+            send("done", sources.isEmpty() ? Map.of() : Map.of("sources", sources));
             finish("COMPLETED");
         }
 

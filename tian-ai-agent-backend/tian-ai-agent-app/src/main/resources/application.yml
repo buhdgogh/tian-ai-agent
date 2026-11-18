@@ -1,4 +1,4 @@
-# Tian 知识工作台开发环境配置
+# Tian Agent 工作台开发环境配置
 server:
   port: 8123
   servlet:
@@ -122,6 +122,12 @@ agent:
       - https://dashscope-us.aliyuncs.com
       - https://cn-hongkong.dashscope.aliyuncs.com
   persistence:
+    clickhouse:
+      enabled: ${CLICKHOUSE_TRACE_ENABLED:true}
+      url: ${CLICKHOUSE_URL:http://127.0.0.1:${CLICKHOUSE_HTTP_PORT:18123}/}
+      database: ${CLICKHOUSE_DB:tian_traces}
+      username: ${CLICKHOUSE_USER:default}
+      password: ${CLICKHOUSE_PASSWORD:}
     mysql:
       enabled: true
       import-legacy-history: true

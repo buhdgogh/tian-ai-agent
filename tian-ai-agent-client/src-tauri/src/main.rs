@@ -4,6 +4,7 @@ mod audit;
 mod commands;
 mod config;
 mod java_client;
+mod persistence;
 mod sandbox;
 
 use tauri::Manager;
@@ -20,6 +21,22 @@ fn main() {
                 .app_log_dir()
                 .map(audit::Audit::new)
                 .unwrap_or_default();
+            let storage = persistence::Persistence::new(app.path().app_data_dir().ok());
+            match tauri::async_runtime::block_on(storage.restore_access()) {
+                Ok(Some(connection)) => {
+                    let client = app.state::<java_client::JavaClient>();
+                    tauri::async_runtime::block_on(client.set_connection(connection));
+                }
+                Ok(None) => {}
+                Err(error) => audit.record(
+                    "storage",
+                    "restore_access",
+                    error.code,
+                    std::time::Instant::now(),
+                    None,
+                ),
+            }
+            app.manage(storage);
             app.manage(audit);
             Ok(())
         })
@@ -29,6 +46,9 @@ fn main() {
             commands::java::configure_java,
             commands::java::java_call,
             commands::java::desktop_diagnostics,
+            persistence::load_workbench,
+            persistence::save_workbench_session,
+            persistence::delete_workbench_session,
             commands::agent::run_agent,
             commands::agent::cancel_agent,
             commands::docker::check_docker,
@@ -36,6 +56,7 @@ fn main() {
             commands::docker::get_active_sandbox,
             commands::docker::create_sandbox,
             commands::docker::stop_sandbox,
+            commands::docker::release_workspace,
             commands::docker::exec_in_sandbox,
             commands::docker::list_sandbox_files,
         ])

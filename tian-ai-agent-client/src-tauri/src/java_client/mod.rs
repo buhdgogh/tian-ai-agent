@@ -1,11 +1,16 @@
 mod operations;
 
-use crate::{audit::Audit, config::JavaConfig};
+use crate::{
+    audit::Audit,
+    config::JavaConfig,
+    sandbox::{Workspace, workspace::WorkspaceCall},
+};
 use reqwest::{Client, Method, RequestBuilder, Url, redirect::Policy};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
     fmt,
+    sync::Arc,
     time::{Duration, Instant},
 };
 use tauri::async_runtime::Mutex;
@@ -20,8 +25,8 @@ pub struct JavaClient {
     override_config: Mutex<Option<Connection>>,
 }
 
-#[derive(Clone)]
-struct Connection {
+#[derive(Clone, Serialize, Deserialize)]
+pub(crate) struct Connection {
     port: u16,
     token: String,
 }
@@ -185,7 +190,22 @@ impl JavaClient {
         }
     }
 
-    pub async fn configure(&self, input: AccessUpdate) -> Result<Access, JavaError> {
+    pub(crate) async fn persistence_identity(&self) -> (u16, String) {
+        self.connection()
+            .await
+            .map_or((0, String::new()), |config| (config.port, config.token))
+    }
+
+    pub(crate) async fn set_connection(&self, connection: Connection) -> Access {
+        let access = connection.access();
+        *self.override_config.lock().await = Some(connection);
+        access
+    }
+
+    pub(crate) async fn prepare_access(
+        &self,
+        input: AccessUpdate,
+    ) -> Result<Connection, JavaError> {
         if input.port == 0
             || input.token.len() > 4096
             || !input
@@ -206,13 +226,10 @@ impl JavaClient {
                 .filter(|value| value.port == input.port)
                 .map_or_else(String::new, |value| value.token)
         };
-        let connection = Connection {
+        Ok(Connection {
             port: input.port,
             token,
-        };
-        let access = connection.access();
-        *self.override_config.lock().await = Some(connection);
-        Ok(access)
+        })
     }
 
     pub async fn check(&self, audit: &Audit) -> HealthReport {
@@ -326,11 +343,23 @@ impl JavaClient {
         &self,
         audit: &Audit,
         payload: &impl Serialize,
+        workspace: Option<Arc<Workspace>>,
         mut emit: impl FnMut(&str, Value) -> Result<(), JavaError>,
     ) -> Result<(), JavaError> {
         let connection = self.ready(audit).await?;
-        let response = connection
-            .request(Method::POST, &["ai", "dispatch", "stream"])?
+        let route = if workspace.is_some() {
+            "desktop-workspace"
+        } else {
+            "dispatch"
+        };
+        let mut request = connection.request(Method::POST, &["ai", route, "stream"])?;
+        if workspace.is_some() {
+            request = request
+                .header("X-Tian-Desktop", "1")
+                .query(&[("auto", "true")])
+                .timeout(Duration::from_secs(425));
+        }
+        let response = request
             .header("Accept", "text/event-stream")
             .json(payload)
             .send()
@@ -341,6 +370,9 @@ impl JavaClient {
         let mut offset = 0;
         let mut event = String::new();
         let mut lines = Vec::new();
+        let mut sandbox_id: Option<String> = None;
+        let mut run_id: Option<String> = None;
+        let mut _lease = None;
         while let Some(chunk) = response.chunk().await.map_err(JavaError::transport)? {
             data.extend_from_slice(&chunk);
             while let Some(newline) = data[offset..].iter().position(|byte| *byte == b'\n') {
@@ -352,7 +384,117 @@ impl JavaClient {
                         let value = serde_json::from_str(&lines.join("\n")).map_err(|_| {
                             JavaError::new("java_response", "Java 流事件格式无效。")
                         })?;
-                        emit(&event, value)?;
+                        if event == "workspace_request" {
+                            if let Some(manager) = workspace.as_ref() {
+                                let call: WorkspaceCall =
+                                    serde_json::from_value(value).map_err(|_| {
+                                        JavaError::new("java_response", "工作区工具请求格式无效。")
+                                    })?;
+                                if !call.valid_ids()
+                                    || run_id.as_deref() != Some(call.run_id.as_str())
+                                {
+                                    return Err(JavaError::new(
+                                        "java_response",
+                                        "工作区工具请求标识无效。",
+                                    ));
+                                }
+                                let mut preparation_error = None;
+                                let result = if call.is_prepare() {
+                                    if sandbox_id.is_some() {
+                                        return Err(JavaError::new(
+                                            "java_response",
+                                            "收到重复的沙箱启动请求。",
+                                        ));
+                                    }
+                                    let start = Instant::now();
+                                    let owned = Arc::clone(manager);
+                                    let startup = tauri::async_runtime::spawn(async move {
+                                        owned.start_for_agent().await
+                                    })
+                                    .await
+                                    .map_err(|_| {
+                                        JavaError::new("workspace_start", "沙箱启动任务已中断。")
+                                    })?;
+                                    let startup = match startup {
+                                        Ok(info) => match manager.lease() {
+                                            Ok(guard) if manager.owns_running(&info.id).await => {
+                                                _lease = Some(guard);
+                                                Ok(info)
+                                            }
+                                            _ => Err(JavaError::new(
+                                                "workspace_start",
+                                                "该会话的沙箱已变更，请重试。",
+                                            )),
+                                        },
+                                        Err(error) => {
+                                            Err(JavaError::new(error.code(), error.to_string()))
+                                        }
+                                    };
+                                    audit.record_traced(
+                                        "sandbox",
+                                        "workspace_prepare",
+                                        startup.as_ref().map_or_else(|error| error.code, |_| "ok"),
+                                        start,
+                                        None,
+                                        Some(&call.run_id),
+                                    );
+                                    match startup {
+                                        Ok(info) => {
+                                            sandbox_id = Some(info.id.clone());
+                                            emit("workspace_ready", serde_json::json!(info))?;
+                                            serde_json::json!({ "ok": true })
+                                        }
+                                        Err(error) => {
+                                            preparation_error = Some(error);
+                                            serde_json::json!({ "ok": false })
+                                        }
+                                    }
+                                } else {
+                                    let id = sandbox_id.as_deref().ok_or_else(|| {
+                                        JavaError::new(
+                                            "workspace_protocol",
+                                            "Java 服务尚未完成沙箱授权握手，请更新并重启后端。",
+                                        )
+                                    })?;
+                                    emit(
+                                        "tools",
+                                        serde_json::json!({ "names": [call.operation()] }),
+                                    )?;
+                                    let result = call.execute(manager, id, audit).await;
+                                    emit("workspace_receipt", call.receipt(&result))?;
+                                    result
+                                };
+                                let reply = connection
+                                    .request(
+                                        Method::POST,
+                                        &[
+                                            "ai",
+                                            "desktop-workspace",
+                                            &call.run_id,
+                                            "results",
+                                            &call.request.request_id,
+                                        ],
+                                    )?
+                                    .header("X-Tian-Desktop", "1")
+                                    .timeout(Duration::from_secs(4))
+                                    .json(&result)
+                                    .send()
+                                    .await
+                                    .map_err(JavaError::transport)?;
+                                success(reply).await?;
+                                if let Some(error) = preparation_error {
+                                    return Err(error);
+                                }
+                            }
+                        } else {
+                            if event == "run" {
+                                run_id = value
+                                    .get("runId")
+                                    .and_then(Value::as_str)
+                                    .map(str::to_owned);
+                            }
+                            emit(&event, value)?;
+                        }
                         if event == "done" {
                             return Ok(());
                         }
@@ -448,13 +590,14 @@ mod tests {
         let audit = Audit::default();
 
         tauri::async_runtime::block_on(async {
-            client
-                .configure(AccessUpdate {
+            let connection = client
+                .prepare_access(AccessUpdate {
                     port,
                     token: "desktop-fixture-token".into(),
                     clear: false,
                 })
                 .await?;
+            client.set_connection(connection).await;
             let offline = client.check(&audit).await;
             assert!(matches!(offline.status, HealthStatus::Unavailable));
             Ok::<(), JavaError>(())
@@ -537,6 +680,7 @@ mod tests {
                 .stream_agent(
                     &audit,
                     &serde_json::json!({ "localWorkspace": false }),
+                    None,
                     |kind, payload| {
                         events.push((kind.to_string(), payload));
                         Ok(())

@@ -17,7 +17,7 @@ onMounted(() => { void store.refresh() })
 <template>
   <main>
     <header>
-      <h1>Tian AI Agent</h1>
+      <h1>Tian Agent 工作台</h1>
       <p>桌面端 · 服务连接</p>
     </header>
 

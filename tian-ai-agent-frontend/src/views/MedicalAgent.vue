@@ -6,18 +6,18 @@
     @send-message="send" @stop-generation="stop">
     <template #composer-actions>
       <div class="composer-options">
-        <span v-if="workspaceLocked" class="ui-pill workspace-button" :title="workspace.name">
-          工作区 · {{ workspace.name }}
+        <span v-if="workspaceLocked" class="ui-pill workspace-button" :title="workspace.name"><WorkspaceIcon name="documents" />
+          <span class="workspace-name">工作区 · {{ workspace.name }}</span>
         </span>
         <button v-else-if="!workspaceLoading && !workspaceUnavailable" type="button" class="ui-button workspace-button"
           :disabled="pickingWorkspace || preparingWorkspace || status === 'connecting'"
-          :title="workspace ? workspace.name : '选择要授权读取的本地项目目录'" @click="selectWorkspace">
-          {{ workspace ? '工作区 · ' + workspace.name : '选择工作区' }}
+          :title="workspace ? workspace.name : '选择要授权读取的本地项目目录'" @click="selectWorkspace"><WorkspaceIcon name="documents" />
+          <span class='workspace-name'>{{ workspace ? '工作区 · ' + workspace.name : '选择工作区' }}</span>
         </button>
         <button v-if="workspace && !workspaceLocked" type="button" class="ui-button" :disabled="pickingWorkspace || preparingWorkspace || status === 'connecting'"
           aria-label="移除本地工作区" @click="clearWorkspace">移除</button>
-        <select id="agent-model" class="ui-field composer-model" aria-label="选择模型"
-          :value="modelProviderId || ''" :disabled="!modelProviders.length && !configuredFreeModels.length"
+        <select id="agent-model" class="ui-field composer-model" aria-label="切换模型"
+          :value="modelProviderId || ''" :disabled="status === 'connecting' || (!modelProviders.length && !configuredFreeModels.length)"
           @change="emit('update:modelProviderId', $event.target.value)">
           <option value="">模型 · 自动选择</option>
           <option v-for="provider in modelProviders" :key="provider.id" :value="provider.id">{{ provider.model }} · {{ provider.id }}</option>
@@ -47,6 +47,7 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import ChatRoom from '../components/ChatRoom.vue'
+import WorkspaceIcon from '../components/WorkspaceIcon.vue'
 import { streamAgentDispatch, getSessionMessages, getTask, getAgentPresets, getApiToken, replyWorkspaceRead } from '../api'
 import { readLocalWorkspace } from '../utils/localWorkspace'
 import { bindWorkspace, getWorkspaceBinding } from '../utils/workspaceBindings'
@@ -386,7 +387,9 @@ onBeforeUnmount(() => {
 </script>
 
 <style scoped>
-.workspace-button { max-width: 180px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.workspace-button { display: inline-flex; align-items: center; gap: 5px; min-width: 0; max-width: min(180px, 100%); }
+.workspace-button svg { width: 15px; height: 15px; flex: none; }
+.workspace-name { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .workspace-hint { flex-basis: 100%; color: var(--muted); font-size: 11px; }
 .composer-options { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; min-width: 0; }
 .composer-skills { position: relative; }
@@ -405,8 +408,9 @@ onBeforeUnmount(() => {
 }
 .skill-picker p { margin: 0; font-size: 12px; }
 .skill-picker label { display: flex; align-items: start; gap: 8px; overflow-wrap: anywhere; }
+.composer-options > .ui-button,.composer-options > .ui-pill { background: var(--surface-muted); }
 .composer-model {
-  max-width: min(220px, 58vw);
+  max-width: min(220px, 100%);
   height: 32px;
   padding: 4px 8px;
   border-radius: 8px;

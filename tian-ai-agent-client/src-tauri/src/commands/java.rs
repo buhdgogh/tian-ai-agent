@@ -1,6 +1,7 @@
 use crate::{
     audit::{Audit, Entry},
     java_client::{Access, AccessUpdate, HealthReport, JavaCall, JavaClient, JavaError},
+    persistence::Persistence,
 };
 use serde_json::Value;
 use tauri::State;
@@ -22,8 +23,14 @@ pub async fn java_access(client: State<'_, JavaClient>) -> Result<Access, JavaEr
 pub async fn configure_java(
     input: AccessUpdate,
     client: State<'_, JavaClient>,
+    storage: State<'_, Persistence>,
 ) -> Result<Access, JavaError> {
-    client.configure(input).await
+    let connection = client.prepare_access(input).await?;
+    storage
+        .save_access(&connection)
+        .await
+        .map_err(|error| JavaError::new(error.code, error.message))?;
+    Ok(client.set_connection(connection).await)
 }
 
 #[tauri::command]

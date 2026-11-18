@@ -23,10 +23,10 @@
         class="settings-form" :aria-label="group.title" :data-model-category="group.id">
       <div class="actions">
         <button v-for="button in group.buttons" :key="button.id" class="ui-button" type="button"
-          :disabled="busy || rows.length >= 20" @click="add(button.id)">{{ button.label }}</button>
+          :disabled="busy || (rows.length >= 20 && !findDraft(group.embedding))" @click="add(button.id)">{{ button.label }}</button>
       </div>
       <p v-if="!group.embedding" class="settings-hint">优先级数字越小越先尝试，相同优先级轮询。</p>
-      <fieldset v-for="row in rows.filter(item => isEmbedding(item) === group.embedding)" :key="row.clientId" class="ui-panel provider" :disabled="busy">
+      <fieldset v-for="row in rows.filter(item => isEmbedding(item) === group.embedding)" :key="row.clientId" :id="`model-draft-${row.clientId}`" class="ui-panel provider" :disabled="busy">
         <div class="provider-heading">
           <h3>{{ row.model || '新模型' }}</h3>
           <div class="actions">
@@ -42,7 +42,7 @@
             </select>
           </label>
           <label>模型名称
-            <input v-model.trim="row.model" class="ui-field" required maxlength="160" placeholder="填写厂商提供的模型 ID" />
+            <input v-model.trim="row.model" data-model-name class="ui-field" required maxlength="160" placeholder="填写厂商提供的模型 ID" />
           </label>
           <label>API Key
             <input v-model.trim="row.apiKey" class="ui-field" type="password" autocomplete="new-password"
@@ -215,14 +215,42 @@ function selectProtocol(row, protocol) {
   selectPreset(row)
 }
 
+function findDraft(embedding) {
+  return rows.value.find(row => row.savedProtocol === undefined && isEmbedding(row) === embedding
+    && (!row.model || !row.apiKey || !row.baseUrl || !row.id))
+}
+
+function revealDraft(row) {
+  nextTick(() => {
+    const form = document.getElementById('model-draft-' + row.clientId)
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector('[data-model-name]')?.focus({ preventScroll: true })
+  })
+}
+
 function add(presetId) {
   const preset = presets.find(item => item.id === presetId)
-  rows.value.push({
+  if (!preset || busy.value) return
+
+  const draft = findDraft(preset.protocol === 'OPENAI_EMBEDDING')
+  if (draft) {
+    if (!draft.model && !draft.apiKey && draft.presetId !== 'custom' && draft.presetId !== preset.id) {
+      draft.presetId = preset.id
+      selectPreset(draft)
+    }
+    revealDraft(draft)
+    return
+  }
+
+  if (rows.value.length >= 20) return
+  const row = {
     clientId: ++clientId, id: providerId(preset.id, clientId), presetId: preset.id,
     protocol: preset.protocol, baseUrl: preset.baseUrl, model: '', apiKey: '', enabled: true, hasApiKey: false,
     priority: Math.min(2147483647, Math.max(-1, ...rows.value.map(row => row.priority)) + 1),
     streamUsage: true, reasoningEffort: '', workspaceId: ''
-  })
+  }
+  rows.value.push(row)
+  revealDraft(row)
 }
 
 const reload = async () => {

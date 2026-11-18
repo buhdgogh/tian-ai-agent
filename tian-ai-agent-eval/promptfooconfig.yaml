@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://www.promptfoo.dev/config-schema.json
-description: Tian 知识工作台普通对话回归
+description: Tian Agent 工作台普通对话回归
 
 prompts:
   - '{{question}}'

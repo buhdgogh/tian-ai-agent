@@ -1,2 +1,2 @@
-Tian 知识工作台
+Tian Agent 工作台
 Spring Boot ${spring-boot.version}

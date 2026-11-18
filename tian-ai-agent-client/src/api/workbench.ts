@@ -6,36 +6,84 @@ export interface CreateSpace { name: string; medical: boolean; embeddingProvider
 export interface KnowledgeFile { id: string; name: string; size: number; status?: string; taskId?: string; error?: string }
 export interface DocumentMetadata { issuer: string; version: string; publishedAt: string; audience: string; documentType: string }
 export interface Evidence { id: string; source: string; excerpt: string }
+export interface KnowledgeSource { reference: string; source: string; excerpt: string }
 export interface WikiNode { id: string; title: string; kind: string }
 export interface WikiPage extends WikiNode { content: string; sources: Evidence[] }
-export interface WikiGraph { nodes: WikiNode[]; edges: { source: string; target: string; label: string }[]; stale?: boolean }
-export interface Session { id: string; title: string; spaceId: string; workspacePath?: string }
+export interface WikiGraph { nodes: WikiNode[]; edges: { source: string; target: string; label: string }[]; stale?: boolean; truncated?: boolean }
+export interface Session { id: string; title: string; spaceId: string; workspacePath?: string | null; knowledgeOnly?: boolean; modelProviderId?: string | null; sharedChatId?: string | null }
+export interface SessionSnapshot { session: Session; messages: ChatMessage[] }
+export interface WorkbenchSnapshot {
+  scope: string
+  backend: 'sqlite' | 'mysql'
+  sessions: SessionSnapshot[]
+  standalonePath: string | null
+}
+export const loadWorkbench = (): Promise<WorkbenchSnapshot> => invoke('load_workbench')
+export const saveWorkbenchSession = (scope: string, snapshot: SessionSnapshot): Promise<void> =>
+  invoke('save_workbench_session', { scope, snapshot })
+export const deleteWorkbenchSession = (scope: string, sessionId: string): Promise<void> =>
+  invoke('delete_workbench_session', { scope, sessionId })
+export type ChatOutcome = 'completed' | 'failed' | 'stopped' | 'incomplete'
+export interface WorkspaceReceipt {
+  operation: string
+  path: string
+  ok: boolean
+  exitCode: number | null
+  stdout: string | null
+  stderr: string | null
+  error: string | null
+}
+export interface WorkspaceAccess { write: boolean; commands: boolean }
+export interface WorkspaceTargetRequest { workspaceId?: string; access: WorkspaceAccess }
+export interface WorkspaceExecution extends WorkspaceAccess {
+  requestId: string
+  chatId: string
+  path: string
+  containerId: string
+}
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant'
+  serverHistory?: boolean
+  localOnly?: boolean
   content: string
   route?: string
+  workspace?: boolean
+  receipts?: WorkspaceReceipt[]
+  targetWorkspace?: WorkspaceExecution
+  outputDirectory?: string
+  cleanupWarning?: string
+  outcome?: ChatOutcome
+  outcomeDetail?: string
   steps?: string[]
+  sources?: KnowledgeSource[]
   runId?: string
   taskId?: string
 }
 export interface ChatRequest {
   requestId: string
   chatId: string
+  sharedChatId?: string
   message: string
   spaceId?: string
   modelProviderId?: string
   skillIds: string[]
-  sandboxId?: string
+  knowledgeOnly?: boolean
+  targetWorkspace?: WorkspaceTargetRequest
+  recentRequests?: string[]
 }
 export type AgentEvent =
-  | { event: 'route'; data: { strategy?: string; requiresWorkflow?: boolean } }
+  | { event: 'workspace_ready'; data: import('./sandbox').SandboxInfo }
+  | { event: 'workspace_receipt'; data: WorkspaceReceipt }
+  | { event: 'target_workspace_ready'; data: WorkspaceExecution }
+  | { event: 'workspace_cleanup_failed'; data: { message: string } }
+  | { event: 'route'; data: { strategy?: string; requiresWorkflow?: boolean; workspaceRoles?: string[] } }
   | { event: 'run'; data: { runId: string } }
   | { event: 'thinking'; data: { step: number; name?: string } }
   | { event: 'tools'; data: { names: string[] } }
   | { event: 'delta'; data: { text: string } }
   | { event: 'task'; data: TaskRecord }
-  | { event: 'done'; data: object }
+  | { event: 'done'; data: { sources?: KnowledgeSource[]; status?: 'COMPLETED' | 'FAILED' } }
 
 export type RunEventKind = '阶段' | '模型' | '工具' | '缓存' | '其他'
 export interface RunEvent {
@@ -54,6 +102,11 @@ export interface AgentRunSummary {
   startedAt: string
   elapsedMs: number
   eventCount: number
+  traceId?: string
+  parentRunId?: string
+  inputTokens?: number | null
+  outputTokens?: number | null
+  totalTokens?: number | null
   taskId?: string
 }
 export interface AgentRun extends AgentRunSummary { events: RunEvent[] }
@@ -66,16 +119,42 @@ export interface TaskRecord {
   result?: Record<string, unknown> | string
   error?: string
 }
-interface JavaEvidence { chunkId?: string; documentId?: string; fileName?: string; title?: string; text?: string }
-
-export function newId(): string { return crypto.randomUUID() }
-function mapEvidence(raw: JavaEvidence[]): Evidence[] {
-  return raw.map((item, index) => ({
-    id: item.chunkId ?? item.documentId ?? String(index),
-    source: item.fileName || item.title || item.documentId || '来源 ' + (index + 1),
-    excerpt: item.text ?? '',
-  }))
+interface SharedSession { id: string; title: string; updatedAt: string }
+interface SharedMessage {
+  role?: string
+  messageType?: string
+  type?: string
+  content?: string
+  text?: string
+  message?: string
+  toolCalls?: { name?: string }[]
+  sources?: KnowledgeSource[]
 }
+export const getSharedSessions = (spaceId: string): Promise<SharedSession[]> =>
+  javaCall('sessions', { spaceId: spaceId || undefined })
+export const deleteSharedSession = (id: string, spaceId: string): Promise<boolean> =>
+  javaCall('deleteSession', { id, spaceId: spaceId || undefined })
+export async function getSharedMessages(id: string, spaceId: string): Promise<ChatMessage[]> {
+  const rows = await javaCall<SharedMessage[]>('sessionMessages', { id, spaceId: spaceId || undefined })
+  if (!Array.isArray(rows)) throw new Error('Java 返回了无效的会话历史。')
+  const result: ChatMessage[] = []
+  let steps: string[] = []
+  for (const row of rows) {
+    const role = (row.role ?? row.messageType ?? row.type ?? '').toLowerCase()
+    if (role === 'user') steps = []
+    if (role !== 'user' && role !== 'assistant') continue
+    if (role === 'assistant') {
+      for (const call of row.toolCalls ?? []) if (call.name && call.name !== 'doTerminate') steps.push(call.name)
+    }
+    const content = row.content ?? row.text ?? row.message ?? ''
+    if (!content.trim() && !row.sources?.length) continue
+    result.push({ id: newId(), role, content, serverHistory: true, sources: row.sources,
+      ...(role === 'assistant' ? { outcome: 'completed', steps: [...new Set(steps)] } : {}) })
+    steps = []
+  }
+  return result
+}
+export function newId(): string { return crypto.randomUUID() }
 export const getKnowledgeSpaces = (): Promise<Space[]> => javaCall('spaces')
 export const createKnowledgeSpace = (body: CreateSpace): Promise<Space> => javaCall('createSpace', { body })
 export const deleteKnowledgeSpace = (id: string, accountName: string): Promise<void> => javaCall('deleteSpace', { id, body: { accountName } })
@@ -86,25 +165,13 @@ export async function uploadKnowledgeFile(spaceId: string, file: File, metadata?
   return javaCall('uploadFile', { spaceId, upload: { filename: file.name, bytes, metadata } })
 }
 export const deleteKnowledgeFile = (spaceId: string, id: string): Promise<unknown> => javaCall('deleteFile', { id, spaceId })
-export async function retrieveKnowledgeBase(spaceId: string, question: string, topK = 8): Promise<Evidence[]> {
-  const result = await javaCall<{ sources: JavaEvidence[] }>('retrieve', { body: { spaceId, question, topK } })
-  return mapEvidence(result.sources ?? [])
-}
-export async function queryKnowledgeBase(spaceId: string, question: string, topK = 8): Promise<{
-  answer: string; sources: Evidence[]; retrievalMode?: string; evidenceReason?: string
-}> {
-  const result = await javaCall<{ answer: string; sources: JavaEvidence[]; retrieval_mode?: string; evidence_reason?: string }>(
-    'query', { body: { spaceId, question, topK } },
-  )
-  return { answer: result.answer, sources: mapEvidence(result.sources ?? []), retrievalMode: result.retrieval_mode, evidenceReason: result.evidence_reason }
-}
 function wikiKind(kind: string): string {
   return ({ ENTITY: '实体', CONCEPT: '概念', SYNTHESIS: '综合' } as Record<string, string>)[kind.toUpperCase()] ?? kind
 }
 export async function getWikiGraph(spaceId: string): Promise<WikiGraph> {
   const graph = await javaCall<WikiGraph>('wikiGraph', { spaceId })
   return {
-    stale: graph.stale,
+    stale: graph.stale, truncated: graph.truncated,
     nodes: graph.nodes.map(node => ({ ...node, kind: wikiKind(node.kind) })),
     edges: graph.edges.map(edge => ({ ...edge, label: '引用' })),
   }
@@ -122,6 +189,7 @@ export const getTasks = (): Promise<TaskRecord[]> => javaCall('tasks')
 export const getTask = (id: string): Promise<TaskRecord> => javaCall('task', { id })
 export const cancelTask = (id: string): Promise<unknown> => javaCall('cancelTask', { id })
 export const getAgentRuns = (): Promise<AgentRunSummary[]> => javaCall('runs')
+export const getAgentTrace = (id: string): Promise<AgentRunSummary[]> => javaCall('trace', { id })
 
 export async function getAgentRun(id: string): Promise<AgentRun | null> {
   try {
@@ -151,7 +219,11 @@ export async function streamAgentDispatch(request: ChatRequest, receive: (event:
       finish?.()
     }
   }
-  await invoke<void>('run_agent', { request, events })
+  try {
+    await invoke<void>('run_agent', { request, events })
+  } catch (error) {
+    if (!done) throw error
+  }
   if (done) return
 
   // Tauri may fetch a large channel payload separately before delivering the remaining events.
@@ -160,7 +232,7 @@ export async function streamAgentDispatch(request: ChatRequest, receive: (event:
     await Promise.race([
       delivered,
       new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error('未能收到完整的会话结果。')), 5000)
+        timer = setTimeout(() => reject({ code: 'agent_delivery_incomplete', message: '未能收到完整的会话结果。' }), 5000)
       }),
     ])
   } finally {

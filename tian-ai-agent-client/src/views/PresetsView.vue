@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import * as api from '../api/settings'
 import { errorText } from '../api/java'
 import { newId } from '../api/workbench'
@@ -12,16 +12,34 @@ const tabs: { id: api.PresetCollection; label: string }[] = [
 ]
 const rows = ref<Row[]>([])
 const error = ref('')
+let loadVersion = 0
 async function load(id: api.PresetCollection) {
+  const version = ++loadVersion
+  if (id !== collection.value) rows.value = []
   collection.value = id
-  error.value = ""; rows.value = []
+  error.value = ''
   try {
-  const presets = await api.getAgentPresets(id)
-  if (collection.value === id) rows.value = presets.map(item => ({ ...item, key: item.id, note: '' }))
-  } catch (failure) { if (collection.value === id) error.value = errorText(failure) }
+    const presets = await api.getAgentPresets(id)
+    if (version === loadVersion) {
+      rows.value = [...rows.value.filter(row => !row.id), ...presets.map(item => ({ ...item, key: item.id, note: '' }))]
+    }
+  } catch (failure) {
+    if (version === loadVersion) error.value = errorText(failure)
+  }
 }
 function add() {
-  rows.value.unshift({ id: '', key: newId(), name: '', description: '', content: '', enabled: true, note: '' })
+  let row = rows.value.find(item => !item.id)
+  if (!row) {
+    row = { id: '', key: newId(), name: '', description: '', content: '', enabled: true, note: '' }
+    rows.value.unshift(row)
+  }
+  const key = row.key
+  nextTick(() => {
+    const form = document.getElementById('preset-draft-' + key) as HTMLDetailsElement | null
+    if (form) form.open = true
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
+  })
 }
 async function save(row: Row) {
   if (!row.name.trim() || !row.content.trim()) return
@@ -48,7 +66,7 @@ onMounted(() => load(collection.value))
       <button v-for="tab in tabs" :key="tab.id" type="button" :aria-pressed="tab.id === collection" @click="load(tab.id)">{{ tab.label }}</button>
     </div>
     <p v-if="error" class="error" role="alert">{{ error }}</p><p v-else-if="!rows.length" class="empty">当前分类暂无配置。</p>
-    <details v-for="row in rows" :key="row.key" class="panel" :open="!row.id">
+    <details v-for="row in rows" :key="row.key" :id="'preset-draft-' + row.key" class="panel" :open="!row.id">
       <summary>{{ row.name || '新配置' }} <span class="badge">{{ row.enabled ? '启用' : '停用' }}</span></summary>
       <form class="form-stack" @submit.prevent="save(row)">
         <label class="field">名称<input v-model.trim="row.name" required maxlength="80" /></label>

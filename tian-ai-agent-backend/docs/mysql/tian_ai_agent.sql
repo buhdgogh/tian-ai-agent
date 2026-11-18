@@ -1,4 +1,4 @@
--- Tian 知识工作台 MySQL 初始化脚本
+-- Tian Agent 工作台 MySQL 初始化脚本
 -- 适用于 MySQL 8.0.16+ 和 8.4。请先选中应用连接的目标库。
 SET NAMES utf8mb4;
 

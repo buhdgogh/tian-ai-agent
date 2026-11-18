@@ -1,4 +1,4 @@
-# Tian 知识工作台
+# Tian Agent 工作台
 
 本项目基于 Spring AI、RAG、长期会话记忆和受控工具调用。用户可按主题创建独立知识库空间，导入文档、查看引用并运行多步任务。每次检索选择一个完整空间，未选空间时直接对话。原医疗资料保留在内置的 `medical` 空间。
 
@@ -78,7 +78,7 @@ java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p
 
 ## 本地后端与 Docker 依赖
 
-Spring Boot 在 Windows 本机运行。[Compose](docs/docker/compose.yml) 管理 MySQL、Redis、Milvus、etcd 和 MinIO。MySQL 使用独立数据卷，已发布的数据库和存储端口绑定到本机回环地址。
+Spring Boot 在 Windows 本机运行。[Compose](docs/docker/compose.yml) 管理 MySQL、ClickHouse、Redis、Milvus、etcd 和 MinIO。数据库使用独立数据卷，已发布的端口绑定到本机回环地址。
 
 先启动 Docker Desktop，在后端根目录的 `.env` 中通过 `MYSQL_PASSWORD` 配置 MySQL root 密码，再运行以下命令。可在 `.env` 中覆盖容器端口，参考 [环境变量模板](docs/docker/.env.example)。
 
@@ -97,7 +97,24 @@ java '-XX:ErrorFile=logs/hs_err_pid%p.log' '-XX:ReplayDataFile=logs/replay_pid%p
 
 后端健康检查位于 `http://localhost:8123/api/health`。Milvus WebUI 位于 `http://localhost:9091/webui/`，MinIO Console 位于 `http://localhost:9001`。旧版 Compose 的 `admin` 或 `mysql` 容器如仍在运行，可单独停止并保留原数据卷。
 
-## 知识工作台接口
+### Agent Trace 与审计
+
+新运行默认写入 ClickHouse 的 `tian_traces.agent_trace_spans`。默认 HTTP 地址为 `http://127.0.0.1:18123/`，用户为 `default`。可通过 `CLICKHOUSE_URL` 或 `CLICKHOUSE_HTTP_PORT` 覆盖地址，通过 `CLICKHOUSE_DB` 和 `CLICKHOUSE_USER` 覆盖数据库及用户。密码由本地 `.env` 中的 `CLICKHOUSE_PASSWORD` 配置。执行 `docker compose --env-file .env -f docs/docker/compose.yml up -d clickhouse` 应用容器配置，再启动或重启 Java。
+
+同一个 `trace_id` 关联入口请求、子 Agent、工作流、模型调用和工具事件。事件记录状态、耗时、Token 及工具参数摘要。ClickHouse 暂时不可用时，新运行先保存到数据目录下的 `agent-trace-pending`，服务恢复后自动补写。已有 MySQL 或文件审计仍可查询。设置 `CLICKHOUSE_TRACE_ENABLED=false` 可启用原审计存储。
+
+桌面端在「运行日志」里打开「查看 Trace 调用链」，可按角色查看调用和 Token。也可使用按账号授权的 `GET /api/agent-runs/trace/{traceId}` 查询调用链，或通过 ClickHouse 查询明细：
+
+```sql
+SELECT run_id, parent_run_id, kind, name, status, elapsed_ms, input_tokens, output_tokens
+FROM tian_traces.agent_trace_spans FINAL
+WHERE trace_id = '<trace_id>'
+ORDER BY started_ms, run_id, sequence;
+```
+
+桌面端在会话选中工作区后，由 Agent 根据请求判断是否访问工作区，并规划所需角色和顺序。用户可以直接指定调用或跳过哪些角色，例如「只调用测试 Agent」或「修改并测试，跳过复核」。勘查和复核角色只读，修改角色可以创建或编辑文件，测试角色在授权的 Docker 沙箱执行项目测试命令。Java 通过同一 Trace 记录路由、模型和工具调用，桌面诊断记录本地执行结果和耗时。
+
+## Agent 工作台接口
 
 | 接口 | 用途 |
 |---|---|

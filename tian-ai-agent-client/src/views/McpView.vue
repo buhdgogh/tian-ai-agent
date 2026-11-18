@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import * as api from '../api/settings'
 import { errorText } from '../api/java'
 import { newId } from '../api/workbench'
@@ -17,8 +17,29 @@ const loadError = ref('')
 function rowFrom(server?: api.McpServer): Row {
   return { id: '', url: '', enabled: true, hasToken: false, tools: [], ...server, key: server?.id ?? newId(), token: '', clearToken: false, note: '', error: '' }
 }
-function add() { rows.value.unshift(rowFrom()) }
-async function load() { loadError.value = ""; try { rows.value = (await api.getMcpServers()).map(rowFrom) } catch (failure) { loadError.value = errorText(failure) } }
+function add() {
+  let row = rows.value.find(item => !item.id)
+  if (!row) {
+    row = rowFrom()
+    rows.value.unshift(row)
+  }
+  const key = row.key
+  nextTick(() => {
+    const form = document.getElementById('mcp-draft-' + key) as HTMLDetailsElement | null
+    if (form) form.open = true
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true })
+  })
+}
+async function load() {
+  loadError.value = ''
+  try {
+    const servers = await api.getMcpServers()
+    rows.value = [...rows.value.filter(row => !row.id), ...servers.map(rowFrom)]
+  } catch (failure) {
+    loadError.value = errorText(failure)
+  }
+}
 async function act(row: Row, work: () => Promise<void>) {
   row.error = ''; row.note = ''
   try { await work() } catch (error) { row.error = errorText(error) }
@@ -52,7 +73,7 @@ onMounted(load)
       <div class="row"><button type="button" @click="load">重新加载</button><button type="button" class="primary" @click="add">导入服务</button></div>
     </PageHeading>
     <p v-if="loadError" class="error" role="alert">{{ loadError }}</p><p v-else-if="!rows.length" class="empty">暂无 MCP 服务。</p>
-    <details v-for="row in rows" :key="row.key" class="panel" :open="!row.id">
+    <details v-for="row in rows" :key="row.key" :id="'mcp-draft-' + row.key" class="panel" :open="!row.id">
       <summary>{{ row.url || '新 MCP 服务' }} <span class="badge">{{ row.enabled ? '启用' : '停用' }}</span></summary>
       <form class="form-stack" @submit.prevent="save(row)">
         <div class="form-grid">

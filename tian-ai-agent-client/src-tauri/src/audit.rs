@@ -25,6 +25,21 @@ pub struct Entry {
     outcome: String,
     elapsed_ms: u64,
     http_status: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    trace_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    workspace: Option<WorkspaceAudit>,
+}
+
+#[derive(Clone, Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceAudit {
+    pub request_id: String,
+    pub chat_id: String,
+    pub path: Option<String>,
+    pub write: bool,
+    pub commands: bool,
+    pub container_id: Option<String>,
 }
 
 impl Audit {
@@ -43,6 +58,59 @@ impl Audit {
         start: Instant,
         http_status: Option<u16>,
     ) {
+        self.record_traced(layer, operation, outcome, start, http_status, None);
+    }
+
+    pub fn record_traced(
+        &self,
+        layer: &str,
+        operation: &str,
+        outcome: &str,
+        start: Instant,
+        http_status: Option<u16>,
+        trace_id: Option<&str>,
+    ) {
+        self.save(
+            layer,
+            operation,
+            outcome,
+            start,
+            http_status,
+            trace_id,
+            None,
+        );
+    }
+
+    pub(crate) fn record_workspace(
+        &self,
+        operation: &str,
+        outcome: &str,
+        start: Instant,
+        trace_id: Option<&str>,
+        workspace: &WorkspaceAudit,
+    ) {
+        self.save(
+            "sandbox",
+            operation,
+            outcome,
+            start,
+            None,
+            trace_id,
+            Some(workspace.clone()),
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn save(
+        &self,
+        layer: &str,
+        operation: &str,
+        outcome: &str,
+        start: Instant,
+        http_status: Option<u16>,
+        trace_id: Option<&str>,
+        workspace: Option<WorkspaceAudit>,
+    ) {
         let entry = Entry {
             timestamp_ms: SystemTime::now()
                 .duration_since(UNIX_EPOCH)
@@ -52,6 +120,8 @@ impl Audit {
             outcome: outcome.into(),
             elapsed_ms: millis(start.elapsed().as_millis()),
             http_status,
+            trace_id: trace_id.map(str::to_owned),
+            workspace,
         };
         if let Ok(line) = serde_json::to_string(&entry) {
             let Some(path) = self.path.as_deref() else {

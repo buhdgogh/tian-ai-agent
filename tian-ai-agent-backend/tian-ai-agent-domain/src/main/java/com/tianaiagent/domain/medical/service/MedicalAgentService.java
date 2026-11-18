@@ -195,6 +195,16 @@ public class MedicalAgentService {
         agent.setChatId(chatId);
         agent.setChatMemory(chatMemory);
         agent.setSkillInstructions(skillInstructions);
+        if (Arrays.stream(tools).anyMatch(tool -> "retrieveKnowledge".equals(tool.getToolDefinition().name()))) {
+            agent.setSystemPrompt(agent.getSystemPrompt() + """
+
+                    当问题涉及所选知识库内的文档、资料或需要核对其依据时，用 toolSearchTool 查找 retrieveKnowledge
+                    并调用它，再依据实际召回的片段回答。涉及 Wiki 综合问答时也可以使用 queryApprovedMedicalKnowledge。
+                    问候、改写、创作和无需查阅所选知识库的通用问题可以直接回答。
+                    使用检索结果支持结论时，在相关句末原样引用该片段返回的 reference（例如 [KB1]）。
+                    若工具返回预生成答案，按 sources 中对应的 reference 标注引用。证据不足时如实说明，不编造编号或来源。
+                    """);
+        }
         if (route != null) {
             agent.setSystemPrompt(agent.getSystemPrompt() + "\n\n" + intentRouter.routingHint(route));
             agent.setSystemPrompt(agent.getSystemPrompt() + layeredMemory.context(

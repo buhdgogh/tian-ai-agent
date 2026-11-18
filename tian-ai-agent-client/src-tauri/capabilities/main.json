@@ -10,6 +10,9 @@
     "allow-configure-java",
     "allow-java-call",
     "allow-desktop-diagnostics",
+    "allow-load-workbench",
+    "allow-save-workbench-session",
+    "allow-delete-workbench-session",
     "allow-run-agent",
     "allow-cancel-agent",
     "allow-check-docker",
@@ -17,6 +20,7 @@
     "allow-get-active-sandbox",
     "allow-create-sandbox",
     "allow-stop-sandbox",
+    "allow-release-workspace",
     "allow-exec-in-sandbox",
     "allow-list-sandbox-files"
   ]

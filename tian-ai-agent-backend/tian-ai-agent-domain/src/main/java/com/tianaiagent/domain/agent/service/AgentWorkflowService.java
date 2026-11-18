@@ -120,7 +120,9 @@ public class AgentWorkflowService {
                 context.update(99, "保存会话", "正在保存工作流的最终回答");
                 writeMessages.accept(List.of(new AssistantMessage(result.executionResult())));
             }
-            return result;
+            var run = AgentRunContext.current();
+            return run == null ? result : new WorkflowResult(result.plan(), result.executions(),
+                    result.executionResult(), result.review(), result.iteration(), run.knowledgeSources());
         });
     }
 
@@ -270,6 +272,7 @@ public class AgentWorkflowService {
         return AgentRunContext.stage("结果整合", () -> workflowChatClient.prompt().system("""
                         你是结果整合器。严格依据步骤结果回答原始目标，不补造事实或引用。
                         删除过程话术和重复内容，保留证据、来源、不确定性与安全提示。
+                        对使用知识库证据的结论，原样保留步骤结果中的 [KB编号]，不得重新编号。
                         """)
                 .user("原始目标：\n" + objective + "\n计划：\n" + clip(asJson(plan))
                         + "\n步骤结果：\n" + clip(asJson(executions)))
@@ -295,7 +298,7 @@ public class AgentWorkflowService {
     private String revise(String objective, String result, ReviewResult review) {
         return AgentRunContext.stage("按审查意见修订", () -> workflowChatClient.prompt().system("""
                         你是结果修订器。逐项修复 Reviewer 指出的问题，只能使用原结果中的事实。
-                        缺少证据时明确说明证据不足，不得补造来源、数据或结论。
+                        缺少证据时明确说明证据不足，不得补造来源、数据或结论。原样保留仍支持结论的 [KB编号]。
                         """)
                 .user("原始目标：\n" + objective + "\n待修订结果：\n" + clip(result)
                         + "\n问题：\n" + clip(asJson(review.issues()))

@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.tianaiagent.TianAiAgentAdminApplication;
 import com.tianaiagent.domain.task.service.AsyncTaskCenter;
 import com.tianaiagent.domain.agent.adapter.port.AgentTools;
+import com.tianaiagent.domain.agent.service.AgentRunAudit;
+import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.knowledge.service.document.DocumentParseService;
 import com.tianaiagent.domain.knowledge.service.IndexService;
 import com.tianaiagent.domain.knowledge.adapter.repository.KnowledgeRepository;
@@ -91,6 +93,7 @@ class McpIntegrationTest {
     @Autowired AsyncTaskCenter tasks;
     @Autowired ObjectMapper mapper;
     @Autowired AgentTools agentTools;
+    @Autowired AgentRunAudit runAudit;
     @Autowired com.tianaiagent.types.config.DocMcpProperties docMcpProperties;
     @MockitoBean(name = "wikiAnswerModel") com.tianaiagent.domain.knowledge.adapter.port.AnswerModel answerModel;
     @MockitoBean UploadRateLimiter uploadRateLimiter;
@@ -335,9 +338,23 @@ class McpIntegrationTest {
             var retrieveTool = java.util.Arrays.stream(agentTools.forSpace(first))
                     .filter(callback -> callback.getToolDefinition().name().equals("retrieveKnowledge"))
                     .findFirst().orElseThrow();
-            var retrieved = mapper.readTree(retrieveTool.call("{\"question\":\"压缩机检修\"}"));
-            assertThat(retrieved.path("sources").findValuesAsText("documentId")).containsOnly(id);
-            assertThat(retrieved.has("answer")).isFalse();
+            var run = runAudit.start("retrieval-test", "DISPATCH", null);
+            try {
+                String arguments = "{\"question\":\"压缩机检修\"}";
+                var retrieved = mapper.readTree(AgentRunContext.within(run, () -> retrieveTool.call(arguments)));
+                assertThat(retrieved.path("sources").findValuesAsText("documentId")).containsOnly(id);
+                assertThat(retrieved.has("answer")).isFalse();
+                var references = retrieved.path("sources").findValuesAsText("reference");
+                assertThat(references).isNotEmpty().contains("[KB1]");
+                var repeated = mapper.readTree(AgentRunContext.within(run, () -> retrieveTool.call(arguments)));
+                assertThat(repeated.path("sources").findValuesAsText("reference")).containsExactlyElementsOf(references);
+                assertThat(run.knowledgeSources()).allSatisfy(source -> {
+                    assertThat(source.source()).isEqualTo("manual.txt");
+                    assertThat(source.excerpt()).isNotBlank();
+                });
+            } finally {
+                run.finish("COMPLETED");
+            }
 
             var evaluation = mvc.perform(post("/rag-evaluations").header("Authorization", admin)
                     .contentType(MediaType.APPLICATION_JSON).content(mapper.writeValueAsString(Map.of(

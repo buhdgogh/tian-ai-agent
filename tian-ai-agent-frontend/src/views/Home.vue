@@ -1,7 +1,7 @@
 <template>
   <main class="home">
     <nav class="home-nav">
-      <RouterLink to="/" class="brand"><span>◇</span> Tian 知识工作台</RouterLink>
+      <RouterLink to="/" class="brand"><span>◇</span> Tian Agent 工作台</RouterLink>
       <div><RouterLink to="/tasks">任务中心</RouterLink><RouterLink to="/agent-runs">运行审计</RouterLink></div>
     </nav>
 

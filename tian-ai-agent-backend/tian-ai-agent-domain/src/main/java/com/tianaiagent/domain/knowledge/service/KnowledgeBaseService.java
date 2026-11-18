@@ -692,13 +692,7 @@ public class KnowledgeBaseService {
         result.put("spaceId", spaceId);
         result.put("question", normalizedQuestion);
         result.put("answer", answer.answer());
-        var sources = result.putArray("sources");
-        for (KnowledgeIndex.Evidence evidence : answer.sources()) {
-            com.fasterxml.jackson.databind.node.ObjectNode source = objectMapper.valueToTree(evidence);
-            String id = evidence.documentId();
-            source.put("fileName", id == null ? "" : nameMap.getOrDefault(id, id));
-            sources.add(source);
-        }
+        addSources(result, answer.sources());
         if (answer.retrievalMode() != null) result.put("retrieval_mode", answer.retrievalMode());
         if (answer.evidenceLevel() != null) result.put("evidence_level", answer.evidenceLevel());
         if (answer.evidenceReason() != null) result.put("evidence_reason", answer.evidenceReason());
@@ -739,8 +733,19 @@ public class KnowledgeBaseService {
         result.put("rerank_top_n", retrieval.rerankTopN());
         result.put("rerank_model", retrieval.rerankModel());
         result.set("queries", objectMapper.valueToTree(retrieval.queries()));
-        result.set("sources", objectMapper.valueToTree(retrieval.sources()));
+        addSources(result, retrieval.sources());
         return result;
+    }
+
+    private void addSources(com.fasterxml.jackson.databind.node.ObjectNode result,
+                            List<KnowledgeIndex.Evidence> evidenceList) {
+        var sources = result.putArray("sources");
+        for (KnowledgeIndex.Evidence evidence : evidenceList) {
+            com.fasterxml.jackson.databind.node.ObjectNode source = objectMapper.valueToTree(evidence);
+            String id = evidence.documentId();
+            source.put("fileName", id == null ? "" : nameMap.getOrDefault(id, id));
+            sources.add(source);
+        }
     }
 
     public void requireMcp() {

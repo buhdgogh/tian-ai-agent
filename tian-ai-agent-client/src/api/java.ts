@@ -15,12 +15,17 @@ export interface Diagnostic {
   outcome: string
   elapsedMs: number
   httpStatus: number | null
+  traceId?: string
+  workspace?: {
+    requestId: string; chatId: string; path: string | null; write: boolean; commands: boolean; containerId: string | null
+  }
 }
 
 type Operation =
+  | 'sessions' | 'sessionMessages' | 'deleteSession'
   | 'spaces' | 'createSpace' | 'deleteSpace' | 'files' | 'deleteFile' | 'uploadFile'
   | 'query' | 'retrieve' | 'wikiGraph' | 'wikiPage' | 'compileWiki' | 'ragEvaluation'
-  | 'tasks' | 'task' | 'cancelTask' | 'workflow' | 'runs' | 'run' | 'toolAudits'
+  | 'tasks' | 'task' | 'cancelTask' | 'workflow' | 'runs' | 'run' | 'trace' | 'toolAudits'
   | 'models' | 'saveModels' | 'skills' | 'prompts' | 'saveSkill' | 'savePrompt' | 'deleteSkill' | 'deletePrompt'
   | 'mcpServers' | 'discoverMcp' | 'saveMcp' | 'deleteMcp'
   | 'toolCredentials' | 'saveMineru' | 'saveSearch' | 'clearMineru' | 'clearSearch'

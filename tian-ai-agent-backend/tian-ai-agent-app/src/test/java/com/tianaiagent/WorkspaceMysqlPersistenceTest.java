@@ -82,6 +82,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @EnabledIfSystemProperty(named = "tian.mysql-test.url", matches = "jdbc:mysql:.*")
 @SpringBootTest(properties = {
+        "agent.persistence.clickhouse.enabled=false",
         "spring.ai.dashscope.api-key=",
         "doc-mcp.enabled=true",
         "doc-mcp.mineru.enabled=false",

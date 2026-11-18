@@ -2,7 +2,9 @@ package com.tianaiagent.trigger.tool;
 
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.tianaiagent.api.mcp.ApiResponse;
+import com.tianaiagent.domain.agent.service.AgentRunContext;
 import com.tianaiagent.domain.knowledge.service.IndexService;
 import com.tianaiagent.domain.knowledge.service.KnowledgeBaseService;
 import org.springframework.ai.tool.annotation.Tool;
@@ -29,14 +31,35 @@ public class MedicalKnowledgeTool {
     public String queryApprovedMedicalKnowledge(
             @ToolParam(description = "需要在当前空间检索的问题，请勿包含个人身份信息") String question,
             @ToolParam(description = "返回证据数量，建议 5 到 8，范围 1 到 20") Integer topK) {
-        return knowledgeBaseService.queryWithSources(spaceId, question, topK).toString();
+        return withReferences(knowledgeBaseService.queryWithSources(spaceId, question, topK)).toString();
     }
 
     @Tool(description = "RAG 检索当前知识库空间的原文片段，返回片段内容、来源、chunkId 和评分，不生成答案。")
     public JsonNode retrieveKnowledge(
             @ToolParam(description = "需要在当前空间检索的问题，请勿包含个人身份信息") String question,
             @ToolParam(description = "返回片段数量，范围 1 到 20，默认 8", required = false) Integer topK) {
-        return knowledgeBaseService.retrieve(spaceId, question, topK);
+        return withReferences(knowledgeBaseService.retrieve(spaceId, question, topK));
+    }
+
+    private JsonNode withReferences(JsonNode result) {
+        var run = AgentRunContext.current();
+        if (run == null) return result;
+        for (JsonNode item : result.path("sources")) {
+            if (!(item instanceof ObjectNode source)) continue;
+            String id = source.path("chunkId").asText("");
+            String documentId = source.path("documentId").asText("");
+            String name = source.path("fileName").asText("");
+            if (name.isBlank() || name.equals(documentId)) name = source.path("title").asText("");
+            if (name.isBlank()) name = documentId;
+            String text = source.path("text").asText("");
+            if (name.isBlank() || text.isBlank()) continue;
+            int length = text.codePointCount(0, text.length());
+            String excerpt = length > 600 ? text.substring(0, text.offsetByCodePoints(0, 600)) + "…" : text;
+            String key = id.isBlank() ? documentId + "\n" + name + "\n" + excerpt : id;
+            String reference = run.recordKnowledgeSource(key, name, excerpt);
+            if (reference != null) source.put("reference", reference);
+        }
+        return result;
     }
 
     @Tool(description = "根据知识库召回结果中的chunkId获取4096/1024/256三级父子上下文，用于核对片段语境，不能使用任意自造ID。")

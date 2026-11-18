@@ -3,7 +3,7 @@
     <header class="app-header">
       <RouterLink class="brand" to="/agent">
         <span class="brand-mark"><WorkspaceIcon name="brand" /></span>
-        <span>Tian <small>知识工作台</small></span>
+        <span>Tian <small>Agent 工作台</small></span>
       </RouterLink>
       <nav v-if="desktopReady" class="workspace-nav" aria-label="工作台导航">
         <RouterLink v-for="item in navigation" :key="item.to" :to="item.to">

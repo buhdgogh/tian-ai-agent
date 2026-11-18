@@ -5,7 +5,7 @@
         <h1>MCP 设置</h1>
         <p>导入已列入后端白名单的 MCP 地址，保存时自动发现并注册工具。</p>
       </div>
-      <button type="button" class="ui-button primary" :disabled="busy || rows.length >= 10" @click="add">导入服务</button>
+      <button type="button" class="ui-button primary" :disabled="busy || (rows.length >= 10 && rows.every(row => row.saved))" @click="add">导入服务</button>
     </header>
     <p v-if="error" class="ui-notice error" role="alert">{{ error }}</p>
     <p v-if="notice" class="ui-notice" role="status">{{ notice }}</p>
@@ -55,7 +55,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { deleteMcpServer, discoverMcpTools, getMcpServers, importMcpServer, saveMcpServer } from '../api'
 import { apiError } from '../utils/medical'
 
@@ -75,7 +75,18 @@ function form(server = {}, key = ++nextKey, expanded = !server.id) {
 }
 
 function add() {
-  rows.value.push(form())
+  let row = rows.value.find(item => !item.saved)
+  if (!row) {
+    row = form()
+    rows.value.push(row)
+  }
+  row.expanded = true
+  const key = row.key
+  nextTick(() => {
+    const form = document.getElementById('mcp-fields-' + key)
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector('input')?.focus({ preventScroll: true })
+  })
 }
 
 function resetTools(row) {

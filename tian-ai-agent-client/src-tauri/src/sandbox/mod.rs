@@ -1,3 +1,5 @@
+pub(crate) mod workspace;
+
 use bollard::{
     API_DEFAULT_VERSION, Docker,
     container::LogOutput,
@@ -10,18 +12,74 @@ use bollard::{
 };
 use futures_util::StreamExt;
 use serde::Serialize;
-use std::{collections::HashMap, fmt, path::PathBuf};
+use std::{
+    collections::HashMap,
+    fmt,
+    path::PathBuf,
+    sync::{Arc, OnceLock},
+};
 use tauri::async_runtime::Mutex;
 
-const IMAGE: &str = "alpine:3.22";
+const IMAGE: &str = "python:3.13-alpine";
 const ROOT: &str = "/workspace";
 const OUTPUT_LIMIT: usize = 64 * 1024;
 const LIST_LIMIT: usize = 200;
 
 #[derive(Default)]
 pub struct SandboxManager {
+    workspaces: Mutex<HashMap<String, Arc<Workspace>>>,
+    run_workspaces: Mutex<HashMap<String, Arc<Workspace>>>,
+}
+
+#[derive(Default)]
+pub(crate) struct Workspace {
+    workspace_task: Mutex<()>,
     selected: Mutex<Option<String>>,
+    default_directory: OnceLock<DefaultDirectory>,
     active: Mutex<Option<ActiveSandbox>>,
+    access: WorkspaceAccess,
+}
+
+#[derive(Clone, Copy, serde::Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct WorkspaceAccess {
+    pub write: bool,
+    pub commands: bool,
+}
+
+impl Default for WorkspaceAccess {
+    fn default() -> Self {
+        Self {
+            write: true,
+            commands: true,
+        }
+    }
+}
+
+struct DefaultDirectory {
+    app_data: PathBuf,
+    account: String,
+    chat: String,
+}
+
+impl DefaultDirectory {
+    fn prepare(&self) -> Result<String, SandboxError> {
+        let invalid =
+            || SandboxError::invalid_workspace("无法使用默认文件目录，请检查应用数据目录。");
+        let mut directory = self.app_data.canonicalize().map_err(|_| invalid())?;
+        for component in ["agent-files", self.account.as_str(), self.chat.as_str()] {
+            directory.push(component);
+            if let Err(error) = std::fs::create_dir(&directory) {
+                if error.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(invalid());
+                }
+            }
+            if directory.canonicalize().ok().as_ref() != Some(&directory) {
+                return Err(invalid());
+            }
+        }
+        workspace_path(directory)
+    }
 }
 
 struct ActiveSandbox {
@@ -32,9 +90,10 @@ struct ActiveSandbox {
 #[derive(Serialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxInfo {
-    id: String,
+    pub(crate) id: String,
     workspace_path: String,
-    image: &'static str,
+    default_workspace: bool,
+    image: String,
     status: &'static str,
 }
 
@@ -78,8 +137,10 @@ enum ErrorCode {
     UnsupportedEngine,
     InvalidWorkspace,
     AlreadyRunning,
+    WorkspaceBusy,
     InvalidSandbox,
     InvalidCommand,
+    AccessDenied,
     InvalidPath,
     Image,
     Container,
@@ -110,8 +171,10 @@ impl SandboxError {
             ErrorCode::UnsupportedEngine => "unsupported_engine",
             ErrorCode::InvalidWorkspace => "invalid_workspace",
             ErrorCode::AlreadyRunning => "already_running",
+            ErrorCode::WorkspaceBusy => "workspace_busy",
             ErrorCode::InvalidSandbox => "invalid_sandbox",
             ErrorCode::InvalidCommand => "invalid_command",
+            ErrorCode::AccessDenied => "workspace_access_denied",
             ErrorCode::InvalidPath => "invalid_path",
             ErrorCode::Image => "image_error",
             ErrorCode::Container => "container_error",
@@ -180,21 +243,175 @@ async fn connect() -> Result<Docker, SandboxError> {
 }
 
 impl SandboxManager {
-    pub async fn authorize(&self, path: PathBuf) -> Result<String, SandboxError> {
-        let selected = workspace_path(path)?;
+    pub(crate) async fn workspace(&self, key: &str) -> Result<Arc<Workspace>, SandboxError> {
+        if key.is_empty()
+            || key.len() > 128
+            || !key
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+        {
+            return Err(SandboxError::invalid_workspace("工作区会话标识无效。"));
+        }
+        Ok(self
+            .workspaces
+            .lock()
+            .await
+            .entry(key.into())
+            .or_default()
+            .clone())
+    }
+
+    pub(crate) async fn agent_workspace(
+        &self,
+        key: &str,
+        app_data: PathBuf,
+        account: String,
+    ) -> Result<Arc<Workspace>, SandboxError> {
+        let workspace = self.workspace(key).await?;
+        workspace
+            .default_directory
+            .get_or_init(|| DefaultDirectory {
+                app_data,
+                account,
+                chat: key.into(),
+            });
+        Ok(workspace)
+    }
+
+    pub(crate) async fn selected_workspace(&self, key: &str) -> Option<Arc<Workspace>> {
+        let workspace = self.workspaces.lock().await.get(key).cloned()?;
+        let selected = workspace.selected.lock().await.is_some();
+        selected.then_some(workspace)
+    }
+
+    pub async fn release(&self, key: &str) -> Result<(), SandboxError> {
+        let workspace = self.workspaces.lock().await.get(key).cloned();
+        if let Some(workspace) = workspace {
+            let _lease = workspace.lease()?;
+            workspace.shutdown().await?;
+            let mut workspaces = self.workspaces.lock().await;
+            if workspaces
+                .get(key)
+                .is_some_and(|current| Arc::ptr_eq(current, &workspace))
+            {
+                workspaces.remove(key);
+            }
+        }
+        Ok(())
+    }
+
+    pub(crate) async fn workspace_directory(&self, key: &str) -> Option<String> {
+        self.selected_workspace(key)
+            .await?
+            .selected
+            .lock()
+            .await
+            .clone()
+    }
+
+    pub(crate) async fn open_run_workspace(
+        &self,
+        request_id: &str,
+        directory: String,
+        access: WorkspaceAccess,
+    ) -> Result<Arc<Workspace>, SandboxError> {
+        let mut runs = self.run_workspaces.lock().await;
+        if runs.contains_key(request_id) {
+            return Err(SandboxError::invalid_workspace("该请求已有独立执行沙箱。"));
+        }
+        let workspace = Arc::new(Workspace {
+            selected: Mutex::new(Some(directory)),
+            access,
+            ..Default::default()
+        });
+        runs.insert(request_id.into(), workspace.clone());
+        Ok(workspace)
+    }
+
+    pub(crate) async fn close_run_workspace(&self, request_id: &str) -> Result<(), SandboxError> {
+        let workspace = self.run_workspaces.lock().await.get(request_id).cloned();
+        if let Some(workspace) = workspace {
+            workspace.shutdown().await?;
+            self.run_workspaces.lock().await.remove(request_id);
+        }
+        Ok(())
+    }
+
+    pub async fn shutdown(&self) -> Result<bool, SandboxError> {
+        let mut workspaces: Vec<_> = self.workspaces.lock().await.values().cloned().collect();
+        workspaces.extend(self.run_workspaces.lock().await.values().cloned());
+        let results =
+            futures_util::future::join_all(workspaces.iter().map(|workspace| workspace.shutdown()))
+                .await;
+        let mut removed = false;
+        for result in results {
+            removed |= result?;
+        }
+        Ok(removed)
+    }
+}
+
+impl Workspace {
+    pub(crate) fn lease(&self) -> Result<impl Drop + Send + '_, SandboxError> {
+        self.workspace_task.try_lock().map_err(|_| {
+            SandboxError::new(ErrorCode::WorkspaceBusy, "当前会话的工作区任务正在执行。")
+        })
+    }
+
+    pub(crate) async fn bind_directory(&self, selected: String) -> Result<String, SandboxError> {
+        let active = self.active.lock().await;
+        if active.is_some() {
+            return Err(SandboxError::new(
+                ErrorCode::AlreadyRunning,
+                "请停止当前会话的沙箱后再选择目录。",
+            ));
+        }
         *self.selected.lock().await = Some(selected.clone());
         Ok(selected)
     }
 
     pub async fn create(&self, path: String) -> Result<SandboxInfo, SandboxError> {
+        let _lease = self.lease()?;
+        self.create_authorized(path, false).await
+    }
+
+    pub(crate) async fn start_for_agent(&self) -> Result<SandboxInfo, SandboxError> {
+        let _lease = self.lease()?;
+        if let Some(sandbox) = self.current().await {
+            if sandbox.status == "running" {
+                return Ok(sandbox);
+            }
+            return Err(SandboxError::new(
+                ErrorCode::Container,
+                "请先清理当前会话的旧沙箱。",
+            ));
+        }
+        let selected = self.selected.lock().await.clone();
+        match selected {
+            Some(path) => self.create_authorized(path, false).await,
+            None => {
+                let directory = self
+                    .default_directory
+                    .get()
+                    .ok_or_else(|| SandboxError::invalid_workspace("请先在当前会话选择工作区。"))?;
+                self.create_authorized(directory.prepare()?, true).await
+            }
+        }
+    }
+
+    async fn create_authorized(
+        &self,
+        path: String,
+        default_workspace: bool,
+    ) -> Result<SandboxInfo, SandboxError> {
         let mut slot = self.active.lock().await;
         if slot.is_some() {
             return Err(SandboxError::new(
                 ErrorCode::AlreadyRunning,
-                "已有沙箱，请先停止。",
+                "当前会话已有沙箱，请先停止。",
             ));
         }
-        if self.selected.lock().await.as_deref() != Some(path.as_str())
+        if (!default_workspace && self.selected.lock().await.as_deref() != Some(path.as_str()))
             || workspace_path(PathBuf::from(&path))? != path
         {
             return Err(SandboxError::invalid_workspace(
@@ -204,11 +421,17 @@ impl SandboxManager {
 
         let user = sandbox_user()?;
         let docker = connect().await?;
-        ensure_image(&docker).await?;
+        let image = std::env::var("TIAN_SANDBOX_IMAGE")
+            .ok()
+            .filter(|image| !image.trim().is_empty())
+            .unwrap_or_else(|| IMAGE.into());
+        ensure_image(&docker, &image).await?;
         let body = ContainerCreateBody {
-            image: Some(IMAGE.into()),
+            image: Some(image.clone()),
             user,
-            cmd: Some(vec!["tail".into(), "-f".into(), "/dev/null".into()]),
+            entrypoint: Some(vec!["/bin/sh".into(), "-c".into()]),
+            cmd: Some(vec!["exec tail -f /dev/null".into()]),
+            env: Some(vec!["HOME=/tmp".into(), "TMPDIR=/tmp".into()]),
             working_dir: Some(ROOT.into()),
             labels: Some(HashMap::from([(
                 "com.tianaiagent.sandbox".into(),
@@ -219,7 +442,7 @@ impl SandboxManager {
                     typ: Some(MountType::BIND),
                     source: Some(path.clone()),
                     target: Some(ROOT.into()),
-                    read_only: Some(false),
+                    read_only: Some(!self.access.write),
                     ..Default::default()
                 }]),
                 network_mode: Some("none".into()),
@@ -251,7 +474,8 @@ impl SandboxManager {
                     info: SandboxInfo {
                         id,
                         workspace_path: path,
-                        image: IMAGE,
+                        default_workspace,
+                        image: image.clone(),
                         status: "cleanup_required",
                     },
                 });
@@ -265,7 +489,8 @@ impl SandboxManager {
         let info = SandboxInfo {
             id,
             workspace_path: path,
-            image: IMAGE,
+            default_workspace,
+            image,
             status: "running",
         };
         *slot = Some(ActiveSandbox {
@@ -283,7 +508,16 @@ impl SandboxManager {
             .map(|sandbox| sandbox.info.clone())
     }
 
+    pub(crate) async fn owns_running(&self, id: &str) -> bool {
+        self.active
+            .lock()
+            .await
+            .as_ref()
+            .is_some_and(|sandbox| sandbox.info.id == id && sandbox.info.status == "running")
+    }
+
     pub async fn stop(&self, id: &str) -> Result<(), SandboxError> {
+        let _lease = self.lease()?;
         let mut slot = self.active.lock().await;
         let sandbox = active(&slot, id)?;
         remove(&sandbox.docker, id).await?;
@@ -291,14 +525,38 @@ impl SandboxManager {
         Ok(())
     }
 
-    pub async fn shutdown(&self) -> Result<bool, SandboxError> {
-        if let Some(info) = self.current().await {
-            self.stop(&info.id).await?;
-            return Ok(true);
-        }
-        Ok(false)
+    async fn shutdown(&self) -> Result<bool, SandboxError> {
+        let mut active = self.active.lock().await;
+        let removed = if let Some(sandbox) = active.as_ref() {
+            remove(&sandbox.docker, &sandbox.info.id).await?;
+            *active = None;
+            true
+        } else {
+            false
+        };
+        *self.selected.lock().await = None;
+        Ok(removed)
     }
     pub async fn exec(&self, id: &str, command: String) -> Result<ExecResult, SandboxError> {
+        self.exec_with_timeout(id, &command, "20").await
+    }
+
+    async fn exec_test(&self, id: &str, command: &str) -> Result<ExecResult, SandboxError> {
+        self.exec_with_timeout(id, command, "90").await
+    }
+
+    async fn exec_with_timeout(
+        &self,
+        id: &str,
+        command: &str,
+        seconds: &str,
+    ) -> Result<ExecResult, SandboxError> {
+        if !self.access.commands {
+            return Err(SandboxError::new(
+                ErrorCode::AccessDenied,
+                "本轮授权未允许执行命令。",
+            ));
+        }
         if command.trim().is_empty() || command.len() > 16_384 || command.contains('\0') {
             return Err(SandboxError::new(
                 ErrorCode::InvalidCommand,
@@ -307,7 +565,7 @@ impl SandboxManager {
         }
         let slot = self.active.lock().await;
         let sandbox = active(&slot, id)?;
-        run(sandbox, vec!["/bin/sh", "-c", &command]).await
+        run_with_timeout(sandbox, vec!["/bin/sh", "-c", command], seconds).await
     }
 
     pub async fn read_file(&self, id: &str, requested: &str) -> Result<ExecResult, SandboxError> {
@@ -325,12 +583,24 @@ impl SandboxManager {
         Ok(result)
     }
 
+    fn require_write(&self) -> Result<(), SandboxError> {
+        if self.access.write {
+            Ok(())
+        } else {
+            Err(SandboxError::new(
+                ErrorCode::AccessDenied,
+                "本轮目标工作区为只读。",
+            ))
+        }
+    }
+
     pub async fn write_file(
         &self,
         id: &str,
         requested: &str,
         text: &str,
     ) -> Result<(), SandboxError> {
+        self.require_write()?;
         if text.len() > 32 * 1024 || text.contains('\0') {
             return Err(SandboxError::new(
                 ErrorCode::InvalidCommand,
@@ -349,6 +619,97 @@ impl SandboxManager {
         .await?;
         if result.exit_code != 0 {
             return Err(file_error());
+        }
+        Ok(())
+    }
+
+    async fn create_file(&self, id: &str, path: &str, text: &str) -> Result<(), SandboxError> {
+        self.require_write()?;
+        if text.len() > 32 * 1024 || text.contains('\0') {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidCommand,
+                "新建文件最多支持 32 KiB 的纯文本。",
+            ));
+        }
+        let (directory, name) = file_parts(path)?;
+        let slot = self.active.lock().await;
+        let sandbox = active(&slot, id)?;
+        let result = run(
+            sandbox,
+            vec![
+                "/bin/sh", "-c", FILE_GUARD, "create", &directory, &name, text,
+            ],
+        )
+        .await?;
+        if result.exit_code != 0 {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidPath,
+                "无法新建文件，检查路径、父目录或同名文件。",
+            ));
+        }
+        Ok(())
+    }
+
+    async fn replace_file(
+        &self,
+        id: &str,
+        path: &str,
+        search: &str,
+        replacement: &str,
+    ) -> Result<(), SandboxError> {
+        self.require_write()?;
+        if search.is_empty() || replacement.contains('\0') || replacement.len() > 32 * 1024 {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidCommand,
+                "请提供非空的原文和有效替换文本。",
+            ));
+        }
+        let (directory, name) = file_parts(path)?;
+        let slot = self.active.lock().await;
+        let sandbox = active(&slot, id)?;
+        let source = run(
+            sandbox,
+            vec!["/bin/sh", "-c", FILE_GUARD, "read", &directory, &name],
+        )
+        .await?;
+        if source.exit_code != 0 || source.truncated || source.stdout.contains(['\0', '\u{fffd}']) {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidPath,
+                "只能编辑不超过 64 KiB 的普通 UTF-8 文本。",
+            ));
+        }
+        if source.stdout.match_indices(search).take(2).count() != 1 {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidCommand,
+                "原文必须精确且仅匹配一次，请重新读取文件。",
+            ));
+        }
+        let updated = source.stdout.replacen(search, replacement, 1);
+        if updated.len() > OUTPUT_LIMIT {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidCommand,
+                "编辑后的文件超过 64 KiB。",
+            ));
+        }
+        let result = run(
+            sandbox,
+            vec![
+                "/bin/sh",
+                "-c",
+                FILE_GUARD,
+                "replace",
+                &directory,
+                &name,
+                &updated,
+                &source.stdout,
+            ],
+        )
+        .await?;
+        if result.exit_code != 0 {
+            return Err(SandboxError::new(
+                ErrorCode::InvalidPath,
+                "文件已变化或无法写入，请重新读取。",
+            ));
         }
         Ok(())
     }
@@ -411,7 +772,7 @@ fn sandbox_user() -> Result<Option<String>, SandboxError> {
     Ok(None)
 }
 
-fn workspace_path(path: PathBuf) -> Result<String, SandboxError> {
+pub(crate) fn workspace_path(path: PathBuf) -> Result<String, SandboxError> {
     let resolved = path
         .canonicalize()
         .map_err(|_| SandboxError::invalid_workspace("无法访问选中的工作区目录。"))?;
@@ -481,8 +842,8 @@ fn active<'a>(
         })
 }
 
-async fn ensure_image(docker: &Docker) -> Result<(), SandboxError> {
-    match docker.inspect_image(IMAGE).await {
+async fn ensure_image(docker: &Docker, image: &str) -> Result<(), SandboxError> {
+    match docker.inspect_image(image).await {
         Ok(_) => return Ok(()),
         Err(DockerError::DockerResponseServerError {
             status_code: 404, ..
@@ -498,19 +859,18 @@ async fn ensure_image(docker: &Docker) -> Result<(), SandboxError> {
     let mut download = docker.create_image(
         Some(
             CreateImageOptionsBuilder::default()
-                .from_image(IMAGE)
+                .from_image(image)
                 .build(),
         ),
         None,
         None,
     );
     while let Some(progress) = download.next().await {
-        progress.map_err(|error| {
-            SandboxError::docker(ErrorCode::Image, "下载 Alpine 镜像失败", error)
-        })?;
+        progress
+            .map_err(|error| SandboxError::docker(ErrorCode::Image, "下载沙箱镜像失败", error))?;
     }
     docker
-        .inspect_image(IMAGE)
+        .inspect_image(image)
         .await
         .map_err(|error| SandboxError::docker(ErrorCode::Image, "镜像不可用", error))?;
     Ok(())
@@ -544,7 +904,15 @@ async fn remove(docker: &Docker, id: &str) -> Result<(), SandboxError> {
 }
 
 async fn run(sandbox: &ActiveSandbox, args: Vec<&str>) -> Result<ExecResult, SandboxError> {
-    let command: Vec<String> = ["timeout", "-k", "2", "20"]
+    run_with_timeout(sandbox, args, "20").await
+}
+
+async fn run_with_timeout(
+    sandbox: &ActiveSandbox,
+    args: Vec<&str>,
+    seconds: &str,
+) -> Result<ExecResult, SandboxError> {
+    let command: Vec<String> = ["timeout", "-k", "2", seconds]
         .into_iter()
         .chain(args)
         .map(String::from)
@@ -645,6 +1013,20 @@ case "$0" in
   read)
     [ -f "$name" ] || exit 44
     head -c 65537 "$name"
+    ;;
+  create)
+    [ ! -e "$name" ] || exit 44
+    tmp="$(mktemp .tian-write.XXXXXX)" || exit 44
+    trap 'rm -f "$tmp"' EXIT
+    printf '%s' "$3" > "$tmp" && ln -T -- "$tmp" "$name"
+    ;;
+  replace)
+    [ -f "$name" ] || exit 44
+    tmp="$(mktemp .tian-write.XXXXXX)" || exit 44
+    trap 'rm -f "$tmp"' EXIT
+    cp -p -- "$name" "$tmp" || exit 44
+    printf '%s' "$4" | cmp -s "$name" - || exit 44
+    printf '%s' "$3" > "$tmp" && mv -fT -- "$tmp" "$name"
     ;;
   write)
     [ ! -e "$name" ] || [ -f "$name" ] || exit 44

@@ -18,6 +18,6 @@ public class TianAiAgentAdminApplication {
         System.setOut(new PrintStream(System.out, true, StandardCharsets.UTF_8));
         System.setErr(new PrintStream(System.err, true, StandardCharsets.UTF_8));
         SpringApplication.run(TianAiAgentAdminApplication.class, args);
-        System.out.println("Tian 知识工作台已启动");
+        System.out.println("Tian Agent 工作台已启动");
     }
 }

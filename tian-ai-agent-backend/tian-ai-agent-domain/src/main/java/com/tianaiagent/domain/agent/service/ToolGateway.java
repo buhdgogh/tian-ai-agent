@@ -76,14 +76,18 @@ public class ToolGateway {
      *  execute方法只做校验，真实的运行还是ToolCallback类中的call方法
      */
     public ToolCallback guard(ToolCallback delegate) {
+        return guard(delegate, timeoutSeconds);
+    }
+
+    ToolCallback guard(ToolCallback delegate, long invocationTimeoutSeconds) {
         return new ToolCallback() {
             @Override public ToolDefinition getToolDefinition() { return delegate.getToolDefinition(); }
             @Override public ToolMetadata getToolMetadata() { return delegate.getToolMetadata(); }
             @Override public String call(String arguments) {
-                return execute(delegate, arguments, () -> delegate.call(arguments));
+                return execute(delegate, arguments, invocationTimeoutSeconds, () -> delegate.call(arguments));
             }
             @Override public String call(String arguments, ToolContext context) {
-                return execute(delegate, arguments, () -> delegate.call(arguments, context));
+                return execute(delegate, arguments, invocationTimeoutSeconds, () -> delegate.call(arguments, context));
             }
         };
     }
@@ -95,7 +99,7 @@ public class ToolGateway {
      * @param invocation 实际执行工具的 Lambda 表达式
      * @return 工具调用结果
      */
-    private String execute(ToolCallback callback, String arguments, Callable<String> invocation) {
+    private String execute(ToolCallback callback, String arguments, long invocationTimeoutSeconds, Callable<String> invocation) {
         String toolName = callback.getToolDefinition().name();
         long started = System.nanoTime();
         String auditId = UUID.randomUUID().toString().replace("-", "");
@@ -116,7 +120,7 @@ public class ToolGateway {
             acquired = permits.tryAcquire(1, TimeUnit.SECONDS);
             if (!acquired) throw new IllegalStateException("工具网关并发已满");
             future = executor.submit(invocation);
-            String result = future.get(timeoutSeconds, TimeUnit.SECONDS);
+            String result = future.get(invocationTimeoutSeconds, TimeUnit.SECONDS);
             String failure = resultFailure(result);
             audit(auditId, toolName, failure == null ? "SUCCESS" : "FAILED", started, digest, failure);
             return result;
@@ -175,7 +179,7 @@ public class ToolGateway {
         if (run != null) {
             run.event(new AgentRun.Event("TOOL", toolName, null, null, status,
                     Instant.now().minusMillis(duration), duration, null, null, null,
-                    error != null && error.matches("[A-Z][A-Z0-9_]{0,63}") ? error : null));
+                    error != null && error.matches("[A-Z][A-Z0-9_]{0,63}") ? error : null, id, digest));
         }
     }
 
@@ -184,7 +188,7 @@ public class ToolGateway {
      * @param value 参数列表
      * @return
      */
-    private String digest(String value) {
+    static String digest(String value) {
         try {
             byte[] bytes = MessageDigest.getInstance("SHA-256")
                     .digest((value == null ? "" : value).getBytes(StandardCharsets.UTF_8));

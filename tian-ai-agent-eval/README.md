@@ -1,4 +1,4 @@
-# Tian 知识工作台 Promptfoo 评测
+# Tian Agent 工作台 Promptfoo 评测
 
 评测请求直接发送给 Spring Boot 后端，沿用工作台的鉴权和模型配置。每次调用生成独立的 `pf-<UUID>` 会话 ID，避免会话历史影响不同用例。断言在本地执行，无需为 Promptfoo 单独配置裁判模型。
 

@@ -8,6 +8,7 @@ import com.tianaiagent.domain.agent.adapter.repository.ToolCredentialStore;
 import com.tianaiagent.infrastructure.adapter.repository.MysqlWorkspaceDatabase;
 import com.tianaiagent.infrastructure.adapter.repository.agent.FileAgentPresetStore;
 import com.tianaiagent.infrastructure.adapter.repository.agent.FileAgentRunRepository;
+import com.tianaiagent.infrastructure.adapter.repository.agent.ClickHouseAgentRunRepository;
 import com.tianaiagent.infrastructure.adapter.repository.agent.FileModelProviderStore;
 import com.tianaiagent.infrastructure.adapter.repository.agent.EncryptedToolCredentialStore;
 import com.tianaiagent.infrastructure.adapter.repository.agent.MysqlAgentPresetStore;
@@ -24,8 +25,12 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
+import org.springframework.scheduling.annotation.EnableScheduling;
+
+import java.net.URI;
 
 @Configuration(proxyBeanMethods = false)
+@EnableScheduling
 class WorkspacePersistenceConfiguration {
     @Bean
     ToolCredentialStore toolCredentialStore(ObjectProvider<MysqlWorkspaceDatabase> mysql) {
@@ -62,13 +67,23 @@ class WorkspacePersistenceConfiguration {
     }
 
     @Bean
-    AgentRunRepository agentRunRepository(ObjectMapper mapper, ObjectProvider<MysqlWorkspaceDatabase> mysql) {
+    AgentRunRepository agentRunRepository(ObjectMapper mapper, ObjectProvider<MysqlWorkspaceDatabase> mysql,
+            @Value("${agent.persistence.clickhouse.enabled:true}") boolean clickHouse,
+            @Value("${agent.persistence.clickhouse.url:http://127.0.0.1:18123/}") URI endpoint,
+            @Value("${agent.persistence.clickhouse.database:tian_traces}") String traceDatabase,
+            @Value("${agent.persistence.clickhouse.username:default}") String traceUser,
+            @Value("${agent.persistence.clickhouse.password:}") String tracePassword) {
         var previous = new FileAgentRunRepository(mapper);
         var database = mysql.getIfAvailable();
-        if (database == null) return previous;
-        var repository = new MysqlAgentRunRepository(database.mapper(AgentRunMapper.class), database.transactions());
-        repository.importLegacy(previous);
-        return repository;
+        AgentRunRepository legacy = previous;
+        if (database != null) {
+            var repository = new MysqlAgentRunRepository(database.mapper(AgentRunMapper.class), database.transactions());
+            repository.importLegacy(previous);
+            legacy = repository;
+        }
+        return clickHouse
+                ? new ClickHouseAgentRunRepository(endpoint, traceDatabase, traceUser, tracePassword, mapper, legacy)
+                : legacy;
     }
 
     @Bean

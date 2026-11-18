@@ -2,19 +2,19 @@
 import { ref, watch } from 'vue'
 import { listSandboxFiles, sandboxError, type FileEntry } from '../api/sandbox'
 
-const props = defineProps<{ sandboxId: string; path: string; revision: number }>()
+const props = defineProps<{ workspaceId: string; sandboxId: string; path: string; revision: number }>()
 const entries = ref<FileEntry[]>([])
 const expanded = ref<string[]>([])
 const loading = ref(false)
 const error = ref('')
 let generation = 0
 
-watch(() => [props.sandboxId, props.path, props.revision], async () => {
+watch(() => [props.workspaceId, props.sandboxId, props.path, props.revision], async () => {
   const ticket = ++generation
   loading.value = true
   error.value = ''
   try {
-    const files = await listSandboxFiles(props.sandboxId, props.path)
+    const files = await listSandboxFiles(props.workspaceId, props.sandboxId, props.path)
     if (ticket === generation) {
       entries.value = files
       expanded.value = expanded.value.filter(path => files.some(file => file.path === path && file.kind === 'directory'))
@@ -47,7 +47,7 @@ function toggle(path: string) {
           <button type="button" class="tree-folder" :aria-expanded="expanded.includes(entry.path)" @click="toggle(entry.path)">
             <span aria-hidden="true">{{ expanded.includes(entry.path) ? '▾' : '▸' }}</span> {{ entry.name }}
           </button>
-          <WorkspaceTree v-if="expanded.includes(entry.path)" :sandbox-id="sandboxId" :path="entry.path" :revision="revision" />
+          <WorkspaceTree v-if="expanded.includes(entry.path)" :workspace-id="workspaceId" :sandbox-id="sandboxId" :path="entry.path" :revision="revision" />
         </template>
         <span v-else class="tree-file">{{ entry.name }}<small v-if="entry.kind === 'symlink'"> · 链接</small></span>
       </li>

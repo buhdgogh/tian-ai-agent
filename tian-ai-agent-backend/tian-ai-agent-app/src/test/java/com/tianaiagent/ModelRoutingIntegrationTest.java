@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
+import org.springframework.boot.test.autoconfigure.web.servlet.MockMvcPrint;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.DynamicPropertyRegistry;
@@ -39,6 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 
 @SpringBootTest(properties = {
         "agent.persistence.mysql.enabled=false",
+        "agent.persistence.clickhouse.enabled=${TIAN_TEST_CLICKHOUSE:false}",
         "spring.ai.dashscope.api-key=",
         "doc-mcp.enabled=false",
         "agent.models.cooldown=0s",
@@ -50,7 +52,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
         "agent.access.users[1].id=trace_other",
         "agent.access.users[1].token=trace-other-test-token-123456"
 })
-@AutoConfigureMockMvc
+@AutoConfigureMockMvc(print = MockMvcPrint.NONE)
 class ModelRoutingIntegrationTest {
     private static final String OWNER = "Bearer trace-owner-test-token-123456";
     private static final String OTHER = "Bearer trace-other-test-token-123456";
@@ -83,8 +85,26 @@ class ModelRoutingIntegrationTest {
             SECONDARY_REQUEST.set(payload);
             SECONDARY_AUTH.set(exchange.getRequestHeaders().getFirst("Authorization"));
             var parsed = new ObjectMapper().readTree(payload);
-            if (payload.contains("虚构的北辰项目")) {
+            if (parsed.path("messages").path(0).path("content").asText().contains("是否要求实际访问已授权的本地工作区")) {
+                var messages = parsed.path("messages");
+                String input = messages.path(messages.size() - 1).path("content").asText();
+                boolean workspace = input.contains("桌面角色集成验证");
+                var json = new ObjectMapper();
+                var plan = json.createObjectNode().put("mode", workspace ? "WORKSPACE" : "CHAT");
+                var roles = plan.putArray("roles");
+                if (input.contains("查看工作区文件")) roles.add("INSPECT");
+                else if (input.contains("先运行测试，再修改文件")) roles.add("TEST").add("EDIT");
+                else if (input.contains("不要跳过代码审查")) roles.add("REVIEW");
+                else if (workspace) roles.add("INSPECT").add("EDIT").add("TEST").add("REVIEW");
+                var reply = json.createObjectNode().put("id", "workspace-route").put("object", "chat.completion")
+                        .put("created", 1).put("model", "secondary-actual");
+                reply.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop")
+                        .putObject("message").put("role", "assistant").put("content", plan.toString());
+                respond(exchange, 200, reply.toString());
+            } else if (payload.contains("虚构的北辰项目")) {
                 respondIndependentTasks(exchange, parsed);
+            } else if (payload.contains("桌面角色集成验证")) {
+                respondDesktopWorkspaceModel(exchange, parsed);
             } else if (payload.contains("工作区集成验证")) {
                 respondWorkspaceModel(exchange, parsed);
             } else if (parsed.path("stream").asBoolean() && payload.contains("Java怎么学") && STREAM_GATE.get() != null) {
@@ -630,6 +650,138 @@ class ModelRoutingIntegrationTest {
     }
 
     @Test
+    void desktopWorkspaceTracesFourRolesAndKeepsTheBrowserReadOnly() throws Exception {
+        String payload = mapper.createObjectNode().put("chatId", "desktop-" + java.util.UUID.randomUUID())
+                .put("message", "桌面角色集成验证：用 Python 帮我编写一个 Hello World 代码文件").toString();
+        mvc.perform(post("/ai/desktop-workspace/stream").header("Authorization", OWNER)
+                        .header("X-Tian-Desktop", "1").header("Origin", "http://localhost")
+                        .contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(status().isForbidden());
+        var pending = mvc.perform(post("/ai/desktop-workspace/stream").param("auto", "true").header("Authorization", OWNER)
+                        .header("X-Tian-Desktop", "1").contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(request().asyncStarted()).andReturn();
+        var preparation = awaitWorkspaceEvent(pending, 0);
+        String runId = preparation.path("runId").asText();
+        assertThat(preparation.path("request").path("action").asText()).isEqualTo("PREPARE");
+        mvc.perform(post("/ai/desktop-workspace/{id}/results/{request}", runId,
+                        preparation.path("request").path("requestId").asText())
+                        .header("Authorization", OWNER).header("X-Tian-Desktop", "1")
+                        .contentType(MediaType.APPLICATION_JSON).content("{\"ok\":true}"))
+                .andExpect(status().isNoContent());
+        String[] roles = {"INSPECT", "EDIT", "TEST", "REVIEW"};
+        String[] actions = {"LIST", "WRITE", "TEST", "READ"};
+        for (int index = 0; index < roles.length; index++) {
+            var envelope = awaitWorkspaceEvent(pending, index + 1);
+            assertThat(envelope.path("runId").asText()).isEqualTo(runId);
+            var call = envelope.path("request");
+            assertThat(call.path("role").asText()).isEqualTo(roles[index]);
+            assertThat(call.path("action").asText()).isEqualTo(actions[index]);
+            if (index == 1) {
+                assertThat(call.path("path").asText()).isEqualTo("hello.py");
+                assertThat(call.path("text").asText()).contains("print(\"Hello, World!\")");
+            }
+            if (index == 2) assertThat(call.path("text").asText()).contains("python", "hello.py");
+            if (index == 3) assertThat(call.path("path").asText()).isEqualTo("hello.py");
+            String callId = call.path("requestId").asText();
+            if (index == 0) {
+                mvc.perform(post("/ai/local-workspace/{id}/results/{request}", runId, callId)
+                                .header("Authorization", OWNER).contentType(MediaType.APPLICATION_JSON).content("{\"ok\":true}"))
+                        .andExpect(status().isNotFound());
+                mvc.perform(post("/ai/desktop-workspace/{id}/results/{request}", runId, callId)
+                                .header("Authorization", OTHER).header("X-Tian-Desktop", "1")
+                                .contentType(MediaType.APPLICATION_JSON).content("{\"ok\":true}"))
+                        .andExpect(status().isNotFound());
+            }
+            mvc.perform(post("/ai/desktop-workspace/{id}/results/{request}", runId, callId)
+                            .header("Authorization", OWNER).header("X-Tian-Desktop", "1").contentType(MediaType.APPLICATION_JSON)
+                            .content(index == 2 ? "{\"ok\":true,\"exitCode\":0,\"stdout\":\"Hello, World!\\n\"}" : "{\"ok\":true}"))
+                    .andExpect(status().isNoContent());
+        }
+        var response = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8))
+                .containsSubsequence("勘查 Agent", "修改 Agent", "已在工作区创建 hello.py", "测试 Agent",
+                        "测试通过", "python -B hello.py", "Hello, World!", "复核 Agent",
+                        "已重新读取并复核 hello.py", "event:done");
+        mvc.perform(get("/agent-runs/trace/{id}", runId).header("Authorization", OTHER))
+                .andExpect(status().isOk()).andExpect(jsonPath("$.length()").value(0));
+        var trace = audit.trace("trace_owner", runId);
+        assertThat(trace).extracting(run -> run.kind()).containsExactly("DESKTOP_DISPATCH",
+                "WORKSPACE_INSPECT", "WORKSPACE_EDIT", "WORKSPACE_TEST", "WORKSPACE_REVIEW");
+        String root = runId;
+        assertThat(trace).allSatisfy(run -> assertThat(run.traceId()).isEqualTo(root));
+        assertThat(trace.subList(1, trace.size())).allSatisfy(run -> {
+            assertThat(run.totalTokens()).isPositive();
+            assertThat(audit.find("trace_owner", run.id()).orElseThrow().events()).anyMatch(event -> event.kind().equals("TOOL"));
+        });
+    }
+
+    @Test
+    void aGeneralDesktopQuestionDoesNotRequestADockerSandbox() throws Exception {
+        String payload = mapper.createObjectNode().put("chatId", "desktop-" + java.util.UUID.randomUUID())
+                .put("message", "Java怎么学").toString();
+        var pending = mvc.perform(post("/ai/desktop-workspace/stream").param("auto", "true").header("Authorization", OWNER)
+                        .header("X-Tian-Desktop", "1").contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(request().asyncStarted()).andReturn();
+        var response = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).contains("流式回复", "event:done")
+                .doesNotContain("event:workspace_request", "WORKSPACE_TEAM");
+    }
+
+    @Test
+    void desktopWorkspaceHonorsSkippedAndExplicitlySelectedRoles() throws Exception {
+        verifyWorkspacePlan("帮我编写一个 Hello World 代码文件并运行测试，不需要调用审查 Agent，也不用勘查 Agent",
+                java.util.List.of("EDIT", "TEST"), java.util.List.of("WRITE", "TEST"),
+                "按你的要求跳过了 勘查 Agent、复核 Agent");
+        verifyWorkspacePlan("只调用测试 Agent，运行现有的 hello.py",
+                java.util.List.of("TEST"), java.util.List.of("TEST"), "测试通过");
+    }
+
+    @Test
+    void desktopWorkspaceCanPlanASingleReadOnlyRoleAutomatically() throws Exception {
+        verifyWorkspacePlan("请查看工作区文件",
+                java.util.List.of("INSPECT"), java.util.List.of("LIST"), "角色已交接");
+        verifyWorkspacePlan("请复核 hello.py，不要跳过代码审查",
+                java.util.List.of("REVIEW"), java.util.List.of("READ"), "角色已交接");
+    }
+
+    @Test
+    void desktopWorkspaceFollowsThePlannedRoleOrder() throws Exception {
+        verifyWorkspacePlan("先运行测试，再修改文件",
+                java.util.List.of("TEST", "EDIT"), java.util.List.of("TEST", "WRITE"), "已在工作区创建 hello.py");
+    }
+
+    private void verifyWorkspacePlan(String message, java.util.List<String> roles,
+                                     java.util.List<String> actions, String answer) throws Exception {
+        String payload = mapper.createObjectNode().put("chatId", "desktop-" + java.util.UUID.randomUUID())
+                .put("message", "桌面角色集成验证：" + message).toString();
+        var pending = mvc.perform(post("/ai/desktop-workspace/stream").param("auto", "true").header("Authorization", OWNER)
+                        .header("X-Tian-Desktop", "1").contentType(MediaType.APPLICATION_JSON).content(payload))
+                .andExpect(request().asyncStarted()).andReturn();
+        var prepare = awaitWorkspaceEvent(pending, 0);
+        String runId = prepare.path("runId").asText();
+        assertThat(prepare.path("request").path("action").asText()).isEqualTo("PREPARE");
+        replyWorkspaceTool(runId, prepare.path("request").path("requestId").asText(), "{\"ok\":true}");
+        for (int index = 0; index < actions.size(); index++) {
+            var call = awaitWorkspaceEvent(pending, index + 1).path("request");
+            assertThat(call.path("role").asText()).isEqualTo(roles.get(index));
+            assertThat(call.path("action").asText()).isEqualTo(actions.get(index));
+            replyWorkspaceTool(runId, call.path("requestId").asText(), "{\"ok\":true,\"exitCode\":0}");
+        }
+        var response = mvc.perform(asyncDispatch(pending)).andExpect(status().isOk()).andReturn().getResponse();
+        assertThat(response.getContentAsString(StandardCharsets.UTF_8)).contains(answer, "event:done");
+        assertThat(audit.trace("trace_owner", runId)).extracting(run -> run.kind())
+                .containsExactlyElementsOf(java.util.stream.Stream.concat(java.util.stream.Stream.of("DESKTOP_DISPATCH"),
+                        roles.stream().map(role -> "WORKSPACE_" + role)).toList());
+    }
+
+    private void replyWorkspaceTool(String runId, String requestId, String response) throws Exception {
+        mvc.perform(post("/ai/desktop-workspace/{id}/results/{request}", runId, requestId)
+                        .header("Authorization", OWNER).header("X-Tian-Desktop", "1")
+                        .contentType(MediaType.APPLICATION_JSON).content(response))
+                .andExpect(status().isNoContent());
+    }
+
+    @Test
     void dispatchDeliversTheFirstModelDeltaBeforeUpstreamCompletes() throws Exception {
         var gate = new java.util.concurrent.CountDownLatch(1);
         STREAM_GATE.set(gate);
@@ -735,6 +887,43 @@ class ModelRoutingIntegrationTest {
         reply.putArray("choices").addObject().put("index", 0).put("finish_reason", "stop")
                 .putObject("message").put("role", "assistant").put("content", answer);
         respond(exchange, 200, reply.toString());
+    }
+
+    private static void respondDesktopWorkspaceModel(com.sun.net.httpserver.HttpExchange exchange,
+                                                     com.fasterxml.jackson.databind.JsonNode request) throws IOException {
+        var json = new ObjectMapper();
+        var messages = request.path("messages");
+        String system = messages.get(0).path("content").asText();
+        String tool = system.contains("新文件用 WRITE") ? "WRITE"
+                : system.contains("通过 TEST") ? "TEST" : system.contains("独立核对") ? "READ" : "LIST";
+        var tools = request.path("tools").findValuesAsText("name");
+        switch (tool) {
+            case "WRITE" -> assertThat(tools).containsExactlyInAnyOrder("LIST", "READ", "WRITE", "REPLACE");
+            case "TEST" -> assertThat(tools).containsExactlyInAnyOrder("LIST", "READ", "TEST");
+            default -> assertThat(tools).containsExactlyInAnyOrder("LIST", "READ");
+        }
+        long replies = messages.findValuesAsText("role").stream().filter("tool"::equals).count();
+        var response = json.createObjectNode().put("id", "desktop-turn").put("object", "chat.completion")
+                .put("created", 1).put("model", "secondary-actual");
+        response.putObject("usage").put("prompt_tokens", 9).put("completion_tokens", 4).put("total_tokens", 13);
+        var choice = response.putArray("choices").addObject().put("index", 0);
+        var message = choice.putObject("message").put("role", "assistant");
+        if (replies == 0) {
+            choice.put("finish_reason", "tool_calls");
+            String arguments = switch (tool) {
+                case "WRITE" -> json.createObjectNode().put("path", "hello.py").put("content", "print(\"Hello, World!\")\n").toString();
+                case "READ" -> "{\"path\":\"hello.py\"}";
+                case "TEST" -> "{\"command\":\"python -B hello.py\"}";
+                default -> "{}";
+            };
+            message.putArray("tool_calls").addObject().put("id", "call-" + replies)
+                    .put("type", "function").putObject("function")
+                    .put("name", tool).put("arguments", arguments);
+        } else {
+            choice.put("finish_reason", "stop");
+            message.put("content", "角色已交接");
+        }
+        respond(exchange, 200, response.toString());
     }
 
     private static void respondWorkspaceModel(com.sun.net.httpserver.HttpExchange exchange,

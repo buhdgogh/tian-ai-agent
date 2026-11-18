@@ -2,6 +2,8 @@ package com.tianaiagent.domain.agent.service;
 
 import com.tianaiagent.domain.agent.adapter.repository.AgentRunRepository;
 import com.tianaiagent.domain.agent.model.entity.AgentRun;
+import com.tianaiagent.domain.agent.model.entity.ToolAuditRecord;
+import com.tianaiagent.domain.agent.model.valobj.WorkflowModels.KnowledgeSource;
 import com.tianaiagent.types.exception.ModelUnavailableException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -12,7 +14,9 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
@@ -24,6 +28,7 @@ import java.util.stream.Stream;
 public class AgentRunAudit {
     private static final Logger log = LoggerFactory.getLogger(AgentRunAudit.class);
     private static final int MAX_EVENTS = 1000;
+    private static final int MAX_KNOWLEDGE_SOURCES = 80;
     private final AgentRunRepository repository;
     private final ConcurrentHashMap<String, Run> active = new ConcurrentHashMap<>();
 
@@ -38,7 +43,8 @@ public class AgentRunAudit {
         if (modelProviderId == null && parent != null && ownerId.equals(parent.ownerId)) {
             modelProviderId = parent.modelProviderId;
         }
-        Run run = new Run(ownerId, kind, taskId, parent == null ? null : parent.id, modelProviderId);
+        if (parent != null && !ownerId.equals(parent.ownerId)) parent = null;
+        Run run = new Run(ownerId, kind, taskId, parent, modelProviderId);
         active.put(run.id, run);
         return run;
     }
@@ -88,6 +94,16 @@ public class AgentRunAudit {
                 .filter(snapshot -> owner.equals(snapshot.summary().ownerId()));
     }
 
+    public Optional<List<ToolAuditRecord>> recentTools() { return repository.recentTools(500); }
+
+    public List<AgentRun.Summary> trace(String owner, String traceId) {
+        var rows = new java.util.LinkedHashMap<String, AgentRun.Summary>();
+        repository.trace(owner, traceId).forEach(run -> rows.put(run.id(), run));
+        active.values().stream().filter(run -> owner.equals(run.ownerId) && traceId.equals(run.traceId))
+                .map(Run::summary).forEach(run -> rows.put(run.id(), run));
+        return rows.values().stream().sorted(Comparator.comparing(AgentRun.Summary::startedAt)).toList();
+    }
+
     public final class Run {
         private final String id = UUID.randomUUID().toString().replace("-", "");
         private final Instant startedAt = Instant.now();
@@ -96,25 +112,41 @@ public class AgentRunAudit {
         private final String kind;
         private final String taskId;
         private final String parentRunId;
+        private final String traceId;
         private final String modelProviderId;
         private final List<AgentRun.Event> events = new ArrayList<>();
+        private final Map<String, KnowledgeSource> knowledgeSources = new LinkedHashMap<>();
         private String status = "RUNNING";
         private long elapsedMs;
         private Long inputTokens;
         private Long outputTokens;
         private Long totalTokens;
 
-        private Run(String ownerId, String kind, String taskId, String parentRunId, String modelProviderId) {
+        private Run(String ownerId, String kind, String taskId, Run parent, String modelProviderId) {
             this.ownerId = ownerId;
             this.kind = kind;
             this.taskId = taskId;
-            this.parentRunId = parentRunId;
+            this.parentRunId = parent == null ? null : parent.id;
+            this.traceId = parent == null ? id : parent.traceId;
             this.modelProviderId = modelProviderId;
         }
 
         public String id() { return id; }
         public String ownerId() { return ownerId; }
         public String modelProviderId() { return modelProviderId; }
+
+        public synchronized String recordKnowledgeSource(String id, String source, String excerpt) {
+            var existing = knowledgeSources.get(id);
+            if (existing != null) return existing.reference();
+            if (!"RUNNING".equals(status) || knowledgeSources.size() >= MAX_KNOWLEDGE_SOURCES) return null;
+            String reference = "[KB" + (knowledgeSources.size() + 1) + "]";
+            knowledgeSources.put(id, new KnowledgeSource(reference, source, excerpt));
+            return reference;
+        }
+
+        public synchronized List<KnowledgeSource> knowledgeSources() {
+            return List.copyOf(knowledgeSources.values());
+        }
 
         public synchronized void event(AgentRun.Event event) {
             if (!"RUNNING".equals(status)) return;
@@ -143,7 +175,7 @@ public class AgentRunAudit {
 
         private synchronized AgentRun.Summary summary() {
             return new AgentRun.Summary(id, ownerId, kind, taskId, parentRunId, status, startedAt,
-                    "RUNNING".equals(status) ? elapsed() : elapsedMs, events.size(), inputTokens, outputTokens, totalTokens);
+                    "RUNNING".equals(status) ? elapsed() : elapsedMs, events.size(), inputTokens, outputTokens, totalTokens, traceId);
         }
 
         private synchronized AgentRun snapshot() { return new AgentRun(summary(), List.copyOf(events)); }

@@ -1,12 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import * as api from '../api/settings'
 import { errorText } from '../api/java'
 import { newId } from '../api/workbench'
 import PageHeading from '../components/PageHeading.vue'
 
 type Category = 'llm' | 'embedding' | 'free'
-interface Row extends api.ModelProvider { key: string; apiKey: string }
+interface Row extends api.ModelProvider { key: string; apiKey: string; draft?: true }
 const tabs: { id: Category; label: string }[] = [
   { id: 'llm', label: 'LLM 模型' }, { id: 'embedding', label: 'Embedding 模型' }, { id: 'free', label: '免费模型' },
 ]
@@ -35,10 +35,28 @@ async function load() {
   try { apply(await api.getModelProviders()) } catch (failure) { version.value = ""; error.value = errorText(failure) }
 }
 function add() {
-  const id = (category.value === 'embedding' ? 'embed-' : 'chat-') + newId().slice(0, 8)
-  rows.value.push({
-    id, key: id, model: '', baseUrl: '', enabled: true, apiKey: '', hasApiKey: false, priority: 0,
-    protocol: category.value === 'embedding' ? 'OPENAI_EMBEDDING' : 'OPENAI_COMPATIBLE',
+  const existing = visible.value.find(row => row.draft
+    && (!row.model.trim() || !row.baseUrl.trim() || !row.apiKey.trim() || !row.id.trim()))
+  if (existing) {
+    revealDraft(existing)
+    return
+  }
+
+  const embedding = category.value === 'embedding'
+  const id = (embedding ? 'embed-' : 'chat-') + newId().slice(0, 8)
+  const row: Row = {
+    id, key: id, model: '', baseUrl: '', enabled: true, apiKey: '', hasApiKey: false, priority: 0, draft: true,
+    protocol: embedding ? 'OPENAI_EMBEDDING' : 'OPENAI_COMPATIBLE',
+  }
+  rows.value.push(row)
+  revealDraft(row)
+}
+
+function revealDraft(row: Row) {
+  nextTick(() => {
+    const form = document.getElementById('model-draft-' + row.key)
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector<HTMLElement>('[data-model-name]')?.focus({ preventScroll: true })
   })
 }
 async function save() {
@@ -54,7 +72,7 @@ async function save() {
   try {
     apply(await api.saveModelProviders({
       version: version.value,
-      providers: rows.value.map(({ key, ...provider }) => provider),
+      providers: rows.value.map(({ key, draft, ...provider }) => provider),
       openCodeFree: { apiKey: openCodeKey.value, clear: clearOpenCodeKey.value },
     }))
     notice.value = '模型配置已保存。'
@@ -80,10 +98,10 @@ onMounted(load)
       <template v-if="category !== 'free'">
         <div><button type="button" @click="add">{{ category === 'llm' ? '添加聊天模型' : '添加向量嵌入模型' }}</button></div>
         <p v-if="!visible.length" class="empty">此分类暂无模型。</p>
-        <section v-for="row in visible" :key="row.key" class="panel stack">
+        <section v-for="row in visible" :key="row.key" :id="`model-draft-${row.key}`" class="panel stack">
           <div class="row spread"><h2>{{ row.model || '新模型' }}</h2><button type="button" class="danger" @click="rows = rows.filter(item => item.key !== row.key)">移除</button></div>
           <div class="form-grid">
-            <label class="field">模型名称<input v-model.trim="row.model" required /></label>
+            <label class="field">模型名称<input v-model.trim="row.model" data-model-name required /></label>
             <label class="field">Base URL<input v-model.trim="row.baseUrl" type="text" required placeholder="https://example.com/v1" /></label>
             <label class="field">API Key<input v-model="row.apiKey" type="password" autocomplete="off" :placeholder="row.hasApiKey ? '密钥已保存' : '输入 API Key'" /></label>
           </div>

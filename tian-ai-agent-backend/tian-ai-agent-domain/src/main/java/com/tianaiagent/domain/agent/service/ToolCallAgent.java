@@ -62,8 +62,13 @@ public class ToolCallAgent extends ReActAgent {
     public ToolCallAgent(ToolCallback[] availableTools,
                          AsyncTaskExecutor parallelToolCallExecutor,
                          Set<String> parallelSafeTools) {
+        this(availableTools, parallelToolCallExecutor, parallelSafeTools, true);
+    }
+
+    ToolCallAgent(ToolCallback[] availableTools, AsyncTaskExecutor parallelToolCallExecutor,
+                  Set<String> parallelSafeTools, boolean searchEnabled) {
         super();
-        this.toolSearch = new ToolSearchSession(availableTools);
+        this.toolSearch = new ToolSearchSession(availableTools, searchEnabled);
         this.toolCallingManager = ToolCallingManager.builder().build();
         this.parallelToolCallExecutor = parallelToolCallExecutor;
         this.parallelSafeTools = Set.copyOf(parallelSafeTools);
@@ -154,7 +159,7 @@ public class ToolCallAgent extends ReActAgent {
         if (StrUtil.isNotBlank(getNextStepPrompt())) {
             systemPrompt += "\n\n" + getNextStepPrompt();
         }
-        systemPrompt += "\n\n" + ToolSearchSession.INSTRUCTIONS;
+        systemPrompt += "\n\n" + toolSearch.instructions();
         List<Message> messageList = new ArrayList<>();
         if (StrUtil.isNotBlank(systemPrompt)) messageList.add(new SystemMessage(systemPrompt));
         messageList.addAll(this.getMessageList());
@@ -220,7 +225,7 @@ public class ToolCallAgent extends ReActAgent {
         ToolExecutionResult toolExecutionResult;
         if (toolCalls.stream().anyMatch(call -> options.getToolCallbacks().stream()
                 .noneMatch(callback -> callback.getToolDefinition().name().equals(call.name())))) {
-            toolExecutionResult = dependencyErrorResult(prompt, assistantMessage, "请先用 toolSearchTool 查找并加载工具");
+            toolExecutionResult = dependencyErrorResult(prompt, assistantMessage, toolSearch.unavailableToolMessage());
         } else {
             toolExecutionResult = executeToolCalls(prompt, assistantMessage, toolCalls);
         }

@@ -46,12 +46,13 @@ macro_rules! operations {
 }
 
 operations! {
+    Sessions => "sessions", SessionMessages => "session_messages", DeleteSession => "delete_session",
     Spaces => "spaces", CreateSpace => "create_space", DeleteSpace => "delete_space",
     Files => "files", DeleteFile => "delete_file", UploadFile => "upload_file",
     Query => "knowledge_query", Retrieve => "knowledge_retrieve", WikiGraph => "wiki_graph",
     WikiPage => "wiki_page", CompileWiki => "wiki_compile", RagEvaluation => "rag_evaluation",
     Tasks => "tasks", Task => "task", CancelTask => "cancel_task", Workflow => "workflow",
-    Runs => "runs", Run => "run", ToolAudits => "tool_audits", Models => "models", SaveModels => "save_models",
+    Runs => "runs", Run => "run", Trace => "trace", ToolAudits => "tool_audits", Models => "models", SaveModels => "save_models",
     Skills => "skills", Prompts => "prompts", SaveSkill => "save_skill", SavePrompt => "save_prompt",
     DeleteSkill => "delete_skill", DeletePrompt => "delete_prompt", McpServers => "mcp_servers",
     DiscoverMcp => "discover_mcp", SaveMcp => "save_mcp", DeleteMcp => "delete_mcp",
@@ -76,6 +77,12 @@ impl JavaCall {
         }
         let required_id = || id.ok_or_else(invalid);
         let (method, segments): (Method, Vec<&str>) = match self.operation {
+            Sessions => (Method::GET, vec!["ai", "sessions"]),
+            SessionMessages => (
+                Method::GET,
+                vec!["ai", "sessions", required_id()?, "messages"],
+            ),
+            DeleteSession => (Method::DELETE, vec!["ai", "sessions", required_id()?]),
             Spaces => (Method::GET, vec!["knowledge-base", "spaces"]),
             CreateSpace => (Method::POST, vec!["knowledge-base", "spaces"]),
             DeleteSpace => (
@@ -103,6 +110,7 @@ impl JavaCall {
             Workflow => (Method::POST, vec!["ai", "workflows"]),
             Runs => (Method::GET, vec!["agent-runs"]),
             Run => (Method::GET, vec!["agent-runs", required_id()?]),
+            Trace => (Method::GET, vec!["agent-runs", "trace", required_id()?]),
             ToolAudits => (Method::GET, vec!["tool-gateway", "audits"]),
             Models => (Method::GET, vec!["model-providers"]),
             SaveModels => (Method::PUT, vec!["model-providers"]),
@@ -157,6 +165,9 @@ impl JavaCall {
             }
             return Ok(request.multipart(form));
         }
+        if matches!(self.operation, Sessions | SessionMessages | DeleteSession) {
+            request = request.query(&[("type", "agent"), ("workspace", "true")]);
+        }
         if let Some(space) = self.space_id {
             request = request.query(&[("spaceId", space)]);
         }
@@ -174,5 +185,62 @@ fn upsert<'a>(collection: &'a str, id: Option<&'a str>) -> (Method, Vec<&'a str>
     match id {
         Some(value) => (Method::PUT, vec![collection, value]),
         None => (Method::POST, vec![collection]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_history_uses_web_session_scope() -> Result<(), Box<dyn std::error::Error>> {
+        let connection = Connection {
+            port: 8080,
+            token: "fixture-token".into(),
+        };
+        for (operation, id, space, method, target) in [
+            (
+                Operation::Sessions,
+                None,
+                None,
+                Method::GET,
+                "/api/ai/sessions",
+            ),
+            (
+                Operation::SessionMessages,
+                Some("agent_web-history"),
+                Some("northstar"),
+                Method::GET,
+                "/api/ai/sessions/agent_web-history/messages",
+            ),
+            (
+                Operation::DeleteSession,
+                Some("agent_web-history"),
+                Some("northstar"),
+                Method::DELETE,
+                "/api/ai/sessions/agent_web-history",
+            ),
+        ] {
+            let request = JavaCall {
+                operation,
+                id: id.map(str::to_owned),
+                space_id: space.map(str::to_owned),
+                body: None,
+                upload: None,
+            }
+            .build(&connection)?
+            .build()?;
+            assert_eq!(*request.method(), method);
+            assert_eq!(request.url().path(), target);
+            let query: std::collections::HashMap<_, _> = request.url().query_pairs().collect();
+            assert_eq!(query.get("type").map(|value| value.as_ref()), Some("agent"));
+            assert_eq!(
+                query.get("workspace").map(|value| value.as_ref()),
+                Some("true")
+            );
+            assert_eq!(query.get("spaceId").map(|value| value.as_ref()), space);
+            assert_eq!(request.headers()["authorization"], "Bearer fixture-token");
+        }
+        Ok(())
     }
 }

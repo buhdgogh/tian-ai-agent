@@ -19,6 +19,7 @@ const events = computed(() => current.value?.events.filter(event => !eventKind.v
 const tokens = computed(() => current.value?.events.reduce((sum, event) => ({
   input: sum.input + (event.inputTokens ?? 0), output: sum.output + (event.outputTokens ?? 0),
 }), { input: 0, output: 0 }) ?? { input: 0, output: 0 })
+const traceTokens = computed(() => runs.value.reduce((total, run) => total + (run.totalTokens ?? 0), 0))
 const hits = computed(() => current.value?.events.filter(event => event.kind === '缓存' && event.status === '命中').length ?? 0)
 const misses = computed(() => current.value?.events.filter(event => event.kind === '缓存' && event.status === '未命中').length ?? 0)
 let selectedRequest = 0
@@ -41,7 +42,8 @@ async function loadJava() {
   const request = ++loadRequest
   error.value = ''
   try {
-    const all = await api.getAgentRuns()
+    const traceId = typeof route.query.traceId === 'string' ? route.query.traceId : ''
+    const all = traceId ? await api.getAgentTrace(traceId) : await api.getAgentRuns()
     if (request !== loadRequest) return
     const id = typeof route.query.runId === 'string' ? route.query.runId : current.value?.id
     runs.value = typeof route.query.taskId === 'string' ? all.filter(run => run.taskId === route.query.taskId) : all
@@ -76,19 +78,27 @@ watch([() => route.query, tab], refresh, { immediate: true })
       <p v-if="!diagnostic.length" class="empty">暂无桌面诊断。</p>
       <div v-else class="table-wrap">
         <table>
-          <thead><tr><th>时间</th><th>来源 / 操作</th><th>结果</th><th>耗时</th><th>HTTP</th></tr></thead>
+          <thead><tr><th>时间</th><th>来源 / 操作</th><th>结果</th><th>耗时</th><th>HTTP</th><th>Trace</th></tr></thead>
           <tbody><tr v-for="(entry, index) in diagnostic" :key="index">
             <td>{{ new Date(entry.timestampMs).toLocaleString() }}</td>
-            <td>{{ entry.layer }} / {{ entry.operation }}</td><td>{{ entry.outcome }}</td>
+            <td>{{ entry.layer }} / {{ entry.operation }}
+              <details v-if="entry.workspace">
+                <summary>{{ entry.workspace.path || '本轮工作区授权' }}</summary>
+                <div>{{ entry.workspace.write ? '读写' : '只读' }} · {{ entry.workspace.commands ? '允许运行命令' : '禁止运行命令' }}</div>
+                <div>请求 <code>{{ entry.workspace.requestId }}</code></div>
+                <div v-if="entry.workspace.containerId">容器 <code>{{ entry.workspace.containerId.slice(0, 12) }}</code></div>
+              </details>
+            </td><td>{{ entry.outcome }}</td>
             <td>{{ entry.elapsedMs }} ms</td><td>{{ entry.httpStatus ?? '—' }}</td>
+<td><RouterLink v-if="entry.traceId" :to="{ path: '/agent-runs', query: { traceId: entry.traceId } }" @click="tab = 'java'">{{ entry.traceId.slice(0, 8) }}</RouterLink></td>
           </tr></tbody>
         </table>
       </div>
     </section>
     <div v-else class="split">
       <section class="panel stack" aria-label="运行列表">
-        <p v-if="error" class="error" role="alert">{{ error }}</p><details v-if="task && !current" open><summary>{{ task.type }} · {{ task.status }}</summary><p>{{ api.taskText(task) }}</p></details><h2>{{ route.query.taskId ? '关联任务' : '最近运行' }}</h2>
-        <RouterLink v-if="route.query.taskId" to="/agent-runs">查看全部运行</RouterLink>
+        <p v-if="error" class="error" role="alert">{{ error }}</p><details v-if="task && !current" open><summary>{{ task.type }} · {{ task.status }}</summary><p>{{ api.taskText(task) }}</p></details><h2>{{ route.query.traceId ? 'Trace 调用链' : route.query.taskId ? '关联任务' : '最近运行' }}</h2>
+        <RouterLink v-if="route.query.taskId || route.query.traceId" to="/agent-runs">查看全部运行</RouterLink>
         <button v-for="run in runs" :key="run.id" type="button" class="item-button" :aria-pressed="current?.id === run.id" @click="select(run.id)">
           <strong>{{ run.kind }}</strong> <span class="badge">{{ run.status }}</span><br /><small>{{ run.elapsedMs }} ms · {{ run.eventCount }} 条事件</small>
         </button>
@@ -97,7 +107,9 @@ watch([() => route.query, tab], refresh, { immediate: true })
       <section v-if="current" class="panel stack" aria-label="运行详情">
         <div class="row spread"><h2>{{ current.kind }}</h2><span class="badge">{{ current.status }}</span></div>
         <p class="muted">{{ new Date(current.startedAt).toLocaleString() }} · {{ current.elapsedMs }} ms</p>
-        <p>输入 {{ tokens.input }} Token · 输出 {{ tokens.output }} Token · 总计 {{ tokens.input + tokens.output }} Token</p>
+        <p>输入 {{ current.inputTokens ?? tokens.input }} Token · 输出 {{ current.outputTokens ?? tokens.output }} Token · 总计 {{ current.totalTokens ?? (tokens.input + tokens.output) }} Token</p>
+        <RouterLink v-if="current.traceId && !route.query.traceId" :to="{ path: '/agent-runs', query: { traceId: current.traceId, runId: current.id } }">查看 Trace 调用链</RouterLink>
+        <p v-if="route.query.traceId" class="muted">Trace ID <code>{{ route.query.traceId }}</code> · 全链路 {{ traceTokens }} Token</p>
         <p>缓存命中 {{ hits }} 次 · 未命中 {{ misses }} 次</p>
         <details v-if="task"><summary>{{ task.type }} · {{ task.status }}</summary><p>{{ api.taskText(task) }}</p></details>
         <h3>执行时间线</h3>

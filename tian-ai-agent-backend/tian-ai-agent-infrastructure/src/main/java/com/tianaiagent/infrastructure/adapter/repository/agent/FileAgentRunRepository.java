@@ -17,10 +17,23 @@ import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 public class FileAgentRunRepository implements AgentRunRepository {
-    private final Path directory = Path.of(FileConstant.FILE_SAVE_DIR, "agent-runs");
+    private final Path directory;
     private final ObjectMapper mapper;
 
-    public FileAgentRunRepository(ObjectMapper mapper) { this.mapper = mapper; }
+    public FileAgentRunRepository(ObjectMapper mapper) { this(mapper, "agent-runs"); }
+
+    FileAgentRunRepository(ObjectMapper mapper, String directoryName) {
+        this.mapper = mapper;
+        this.directory = Path.of(FileConstant.FILE_SAVE_DIR, directoryName);
+    }
+
+    void delete(String id) throws IOException { Files.deleteIfExists(directory.resolve(id + ".json")); }
+
+    List<AgentRun> pending(int limit) throws IOException {
+        try (var files = runFiles()) {
+            return files.limit(limit).flatMap(path -> read(path).stream()).toList();
+        }
+    }
 
     @Override
     public void save(AgentRun run) {

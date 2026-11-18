@@ -31,9 +31,16 @@ public class AgentRunController {
         return audit.find(identity.ownerId(), id).orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
     }
 
+    @GetMapping("/agent-runs/trace/{traceId}")
+    public List<AgentRun.Summary> trace(@PathVariable String traceId,
+            @RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
+        if (!traceId.matches("[0-9a-f]{32}")) throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
+        return audit.trace(identity.ownerId(), traceId);
+    }
+
     @GetMapping("/tool-gateway/audits")
     public List<ToolAuditRecord> recentAudits(@RequestAttribute(RequestIdentity.ATTRIBUTE) RequestIdentity identity) {
         identity.requireAdmin();
-        return toolGateway.recentAudits();
+        return audit.recentTools().orElseGet(toolGateway::recentAudits);
     }
 }

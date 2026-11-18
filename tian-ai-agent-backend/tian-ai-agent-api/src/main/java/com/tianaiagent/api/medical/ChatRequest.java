@@ -3,7 +3,11 @@ package com.tianaiagent.api.medical;
 import java.util.List;
 
 public record ChatRequest(String message, String chatId, String spaceId, String modelProviderId, List<String> skillIds,
-                          boolean localWorkspace) {
+                          boolean localWorkspace, List<String> recentRequests) {
+    public ChatRequest(String message, String chatId, String spaceId, String modelProviderId, List<String> skillIds,
+                       boolean localWorkspace) {
+        this(message, chatId, spaceId, modelProviderId, skillIds, localWorkspace, null);
+    }
     public ChatRequest(String message, String chatId, String spaceId) {
         this(message, chatId, spaceId, null);
     }

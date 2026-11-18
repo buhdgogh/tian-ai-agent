@@ -51,7 +51,7 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { nextTick, onMounted, ref } from 'vue'
 import { deleteAgentPreset, getAgentPresets, saveAgentPreset } from '../api'
 import { apiError } from '../utils/medical'
 
@@ -68,7 +68,18 @@ const notice = ref('')
 let nextKey = 0
 
 function add() {
-  rows.value.unshift({ key: ++nextKey, expanded: true, name: '', description: '', content: '', enabled: true })
+  let row = rows.value.find(item => !item.id)
+  if (!row) {
+    row = { key: ++nextKey, expanded: true, name: '', description: '', content: '', enabled: true }
+    rows.value.unshift(row)
+  }
+  row.expanded = true
+  const key = row.key
+  nextTick(() => {
+    const form = document.getElementById('preset-fields-' + key)
+    form?.scrollIntoView({ block: 'nearest' })
+    form?.querySelector('input')?.focus({ preventScroll: true })
+  })
 }
 
 async function request(work) {

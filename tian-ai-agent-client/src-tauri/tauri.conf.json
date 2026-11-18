@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Tian AI Agent",
+  "productName": "Tian Agent 工作台",
   "version": "0.1.0",
   "identifier": "com.tianaiagent.desktop",
   "build": {
@@ -13,7 +13,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Tian AI Agent",
+        "title": "Tian Agent 工作台",
         "width": 900,
         "height": 620,
         "minWidth": 500,

@@ -12,9 +12,15 @@ public final class WorkflowModels {
                                String successCriteria, List<String> dependsOn, String status) {}
     public record WorkflowPlan(String objective, String summary, List<WorkflowStep> steps) {}
     public record StepExecution(int order, String role, String description, String result) {}
+    public record KnowledgeSource(String reference, String source, String excerpt) {}
     public record WorkflowResult(WorkflowPlan plan, List<StepExecution> executions,
                                  String executionResult, ReviewResult review,
-                                 int iteration) {}
+                                 int iteration, List<KnowledgeSource> sources) {
+        public WorkflowResult(WorkflowPlan plan, List<StepExecution> executions,
+                              String executionResult, ReviewResult review, int iteration) {
+            this(plan, executions, executionResult, review, iteration, List.of());
+        }
+    }
     public record ReviewResult(boolean passed, boolean requiresHumanReview,
                                String reviewerRole, String message, List<String> issues,
                                String revisionInstruction, boolean replanRequired) {}

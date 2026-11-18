@@ -1,11 +1,14 @@
 <template>
-  <section class="chat-shell" :style="{ '--chat-accent': themeColor }" @click="handleCitationClick">
+  <section class="chat-shell" :class="{ 'is-agent-start': aiType === 'agent' && !visibleMessages.length }" :style="{ '--chat-accent': themeColor }" @click="handleCitationClick">
     <div v-if="emergencyText" class="emergency" role="alert"><strong>紧急提示</strong><span>{{ emergencyText }}</span></div>
     <div ref="scroller" class="messages">
       <div v-if="!visibleMessages.length" class="welcome">
-        <div class="welcome-icon"><WorkspaceIcon name="agent" /></div><p class="ui-kicker">Agent Workspace</p>
-        <h1>{{ title }}</h1><p>{{ subtitle }}</p>
-        <div class="quick-grid"><button v-for="q in quickQuestions" :key="q" class="ui-button" type="button" :disabled="generating" @click="emit('send-message', q)">{{ q }}<WorkspaceIcon name="arrow" /></button></div>
+        <h1 v-if="aiType === 'agent'">想让 Agent 做什么？</h1>
+        <template v-else>
+          <div class="welcome-icon"><WorkspaceIcon name="agent" /></div>
+          <h1>{{ title }}</h1><p>{{ subtitle }}</p>
+        </template>
+        <div v-if="aiType !== 'agent'" class="quick-grid"><button v-for="q in quickQuestions" :key="q" class="ui-button" type="button" :disabled="generating" @click="emit('send-message', q)">{{ q }}<WorkspaceIcon name="arrow" /></button></div>
       </div>
       <article v-for="(msg,index) in visibleMessages" :key="msg.id || `${msg.time}-${index}`" class="message" :class="msg.isUser?'user':'assistant'">
         <div class="avatar"><span v-if="msg.isUser">我</span><WorkspaceIcon v-else name="agent" /></div>
@@ -67,9 +70,9 @@
           </button>
         </div>
         <TrSender ref="sender" v-model="input" class="composer" :placeholder="placeholder" :loading="generating"
-          :mode="$slots['composer-actions'] ? 'multiple' : 'single'" :auto-size="{ minRows: 1, maxRows: 5 }"
+          :mode="$slots['composer-actions'] ? 'multiple' : 'single'" :auto-size="{ minRows: aiType === 'agent' ? 2 : 1, maxRows: 5 }"
           @input="onComposerInput" @blur="closePromptPicker" @submit="send" @cancel="emit('stop-generation')">
-          <template v-if="$slots['composer-actions']" #footer-right>
+          <template v-if="$slots['composer-actions']" #footer>
             <slot name="composer-actions" />
           </template>
         </TrSender>
@@ -355,6 +358,13 @@ footer { flex-shrink: 0; padding: 12px max(16px, calc((100% - var(--chat-content
   --tr-sender-border-radius: 14px;
   width: 100%;
 }
+.is-agent-start { overflow: auto; --chat-content-width: 800px; }
+.is-agent-start .messages { flex: none; overflow: visible; margin-top: auto; padding-top: 22px; padding-bottom: 8px; }
+.is-agent-start .welcome { margin: 0 auto; }
+.is-agent-start .welcome h1 { margin: 0; letter-spacing: -.025em; }
+.is-agent-start footer { margin-bottom: auto; }
+.composer :deep(.tr-sender-footer-left) { min-width: 0; }
+.composer :deep(.tr-sender-footer-right) { flex: none; }
 .privacy,.boundary { margin-top: 6px; text-align: center; color: var(--muted); font-size: 11px; }
 .emergency { display: flex; gap: 10px; padding: 10px 16px; color: var(--danger); background: var(--danger-soft); }
 .emergency strong { white-space: nowrap; }
